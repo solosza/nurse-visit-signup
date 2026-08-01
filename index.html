@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Nurse Visit Sign-Up · August 2026</title>
+<style>
+  :root {
+    --bg: #FBF9F7;
+    --ink: #2B2A33;
+    --card-border: #ECE7E3;
+    --muted: #A08A93;
+    --muted2: #C7BFC4;
+    --gold: #B8905A;
+    --pink: #B8637A;
+    --green: #4E8D6E;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    background: var(--bg);
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: var(--ink);
+    padding-bottom: 48px;
+  }
+  .wrap { max-width: 620px; margin: 0 auto; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  .fade { animation: fadeIn 0.25s ease-out; }
+  input:focus, button:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
+
+  /* Header */
+  .hdr {
+    background: linear-gradient(135deg, #4A3F55 0%, #6B5570 100%);
+    padding: 28px 20px 22px;
+    color: var(--bg);
+  }
+  .hdr .eyebrow {
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    opacity: 0.75; margin-bottom: 6px; font-weight: 600;
+  }
+  .hdr .title { font-size: 22px; font-weight: 700; font-family: Georgia, serif; }
+  .hdr .backrow { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .hdr .back {
+    background: rgba(255,255,255,0.15); border: none; color: var(--bg);
+    font-size: 12px; font-weight: 600; padding: 5px 10px; border-radius: 8px; cursor: pointer;
+  }
+  .hdr .back:hover { background: rgba(255,255,255,0.25); }
+  .hdr .daytitle { font-size: 20px; font-weight: 700; font-family: Georgia, serif; }
+  .hdr .covered { font-size: 12px; opacity: 0.8; margin-top: 4px; font-weight: 600; }
+
+  /* Identity bar */
+  .whoami {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    font-size: 12px; color: var(--muted); padding: 10px 14px 0; text-align: center;
+  }
+  .whoami b { color: var(--ink); }
+  .whoami button {
+    background: none; border: none; color: var(--pink); font-size: 12px;
+    font-weight: 600; cursor: pointer; padding: 2px 4px; text-decoration: underline;
+  }
+
+  /* Month grid */
+  .gridwrap { padding: 14px 14px 0; }
+  .grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 7px; }
+  .day {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    padding: 10px 2px; border-radius: 10px; border: 1.5px solid var(--card-border);
+    background: #fff; cursor: pointer; box-shadow: rgba(43,42,51,0.05) 0 1px 2px;
+    transition: transform 0.08s ease, border-color 0.15s ease;
+  }
+  .day:hover { transform: translateY(-1px); border-color: var(--muted2); }
+  .day .dow { font-size: 9px; color: var(--muted); font-weight: 600; text-transform: uppercase; }
+  .day .num { font-size: 15px; font-weight: 700; color: var(--ink); }
+  .day .cnt { font-size: 9px; font-weight: 700; }
+  .cnt.zero { color: var(--muted2); }
+  .cnt.some { color: var(--gold); }
+  .cnt.full { color: var(--green); }
+
+  .hint { text-align: center; font-size: 11px; color: var(--muted); margin: 18px 20px; }
+  .foot { text-align: center; font-size: 11px; color: var(--muted); margin-top: 18px; padding: 0 20px; }
+
+  /* Day detail */
+  .daywrap { padding: 14px 14px 0; }
+  .section-label {
+    font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted);
+    font-weight: 700; margin: 18px 4px 8px;
+  }
+  .section-label:first-child { margin-top: 6px; }
+  .visit {
+    display: flex; gap: 12px; background: #fff; border: 1.5px solid var(--card-border);
+    border-radius: 12px; padding: 12px 12px; margin-bottom: 8px; box-shadow: rgba(43,42,51,0.05) 0 1px 2px;
+  }
+  .visit.claimed { background: #F4F8F5; border-color: #D5E7DD; }
+  .vtime { display: flex; flex-direction: column; align-items: center; min-width: 46px; padding-top: 2px; }
+  .vtime .t { font-size: 15px; font-weight: 700; color: var(--ink); line-height: 1.1; }
+  .vtime .ap { font-size: 10px; font-weight: 700; color: var(--muted); }
+  .vbody { flex: 1; min-width: 0; }
+  .vpatient { font-size: 15px; font-weight: 700; color: var(--ink); }
+  .vloc { font-size: 12px; color: var(--muted); font-weight: 600; margin-left: 6px; }
+  .vtask { font-size: 12.5px; color: #55505A; margin-top: 3px; line-height: 1.35; }
+  .vaction { margin-top: 9px; }
+  .btn-signup {
+    background: var(--pink); color: #fff; border: none; font-size: 12.5px; font-weight: 700;
+    padding: 7px 14px; border-radius: 8px; cursor: pointer;
+  }
+  .btn-signup:hover { filter: brightness(1.05); }
+  .claimed-by { display: flex; align-items: center; gap: 8px; margin-top: 9px; flex-wrap: wrap; }
+  .claimed-by .tag {
+    font-size: 12.5px; font-weight: 700; color: var(--green);
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .claimed-by .release {
+    background: none; border: none; color: var(--muted); font-size: 12px;
+    text-decoration: underline; cursor: pointer; font-weight: 600; padding: 0;
+  }
+
+  /* Loading / toast */
+  .loading { text-align: center; padding: 40px 20px; color: var(--muted); font-size: 13px; }
+  .spinner {
+    width: 22px; height: 22px; border: 2.5px solid var(--card-border); border-top-color: var(--pink);
+    border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 12px;
+  }
+  .toast {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 10px;
+    font-size: 13px; font-weight: 600; box-shadow: rgba(0,0,0,0.2) 0 4px 16px;
+    opacity: 0; pointer-events: none; transition: opacity 0.2s ease; z-index: 50; max-width: 88%;
+  }
+  .toast.show { opacity: 1; }
+  .live-dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green); margin-right: 5px; vertical-align: middle;
+  }
+  .live-dot.off { background: var(--muted2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="header"></div>
+  <div id="whoami" class="whoami"></div>
+  <div id="content">
+    <div class="loading"><div class="spinner"></div>Loading schedule…</div>
+  </div>
+  <div class="foot" id="foot"></div>
+</div>
+<div id="toast" class="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var SUPABASE_URL = "https://toqcipuepxdmlhkpjozw.supabase.co";
+  var SUPABASE_KEY = "sb_publishable_hKZKOQGTihooRc4InIU0VA_19KqKGoM";
+  var MONTH_LABEL = "August 2026";
+  var CAPACITY = 11;
+
+  var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  var state = {
+    visits: [],            // all rows
+    byId: {},              // id -> row
+    selectedDate: null,    // 'YYYY-MM-DD' or null (month view)
+    nurse: localStorage.getItem("nurseName") || "",
+    live: false
+  };
+
+  var MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  var DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  var DOW_LONG = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+
+  function el(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c];
+    });
+  }
+  function parseDate(iso) { // 'YYYY-MM-DD' -> local Date (no TZ shift)
+    var p = iso.split("-"); return new Date(+p[0], +p[1]-1, +p[2]);
+  }
+
+  var toastTimer;
+  function toast(msg) {
+    var t = el("toast"); t.textContent = msg; t.classList.add("show");
+    clearTimeout(toastTimer); toastTimer = setTimeout(function(){ t.classList.remove("show"); }, 2600);
+  }
+
+  function getNurse() {
+    if (state.nurse) return state.nurse;
+    var name = window.prompt("Enter your name so others can see who signed up:");
+    if (name && name.trim()) {
+      state.nurse = name.trim();
+      localStorage.setItem("nurseName", state.nurse);
+      renderWhoami();
+    }
+    return state.nurse;
+  }
+  function changeNurse() {
+    var name = window.prompt("Your name:", state.nurse || "");
+    if (name && name.trim()) {
+      state.nurse = name.trim();
+      localStorage.setItem("nurseName", state.nurse);
+      renderWhoami(); render();
+    }
+  }
+
+  // ---- data ----
+  function indexVisits() {
+    state.byId = {};
+    for (var i = 0; i < state.visits.length; i++) state.byId[state.visits[i].id] = state.visits[i];
+  }
+  function countFor(dateIso) {
+    var total = 0, claimed = 0;
+    for (var i = 0; i < state.visits.length; i++) {
+      if (state.visits[i].visit_date === dateIso) { total++; if (state.visits[i].claimed_by) claimed++; }
+    }
+    return { total: total, claimed: claimed };
+  }
+  function datesList() {
+    var seen = {}, out = [];
+    for (var i = 0; i < state.visits.length; i++) {
+      var d = state.visits[i].visit_date;
+      if (!seen[d]) { seen[d] = 1; out.push(d); }
+    }
+    out.sort();
+    return out;
+  }
+
+  async function loadAll() {
+    var res = await sb.from("visits").select("*").order("visit_date", { ascending: true }).order("sort_order", { ascending: true });
+    if (res.error) { el("content").innerHTML = '<div class="loading">Could not load the schedule. Please refresh.</div>'; return; }
+    state.visits = res.data || [];
+    indexVisits();
+    render();
+  }
+
+  function subscribeLive() {
+    sb.channel("visits-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "visits" }, function (payload) {
+        var row = payload.new;
+        if (!row || !row.id) return;
+        if (state.byId[row.id]) {
+          // update in place
+          var cur = state.byId[row.id];
+          for (var k in row) cur[k] = row[k];
+        } else {
+          state.visits.push(row); state.byId[row.id] = row;
+        }
+        render();
+      })
+      .subscribe(function (status) {
+        state.live = (status === "SUBSCRIBED");
+        renderFoot();
+      });
+  }
+
+  // ---- actions ----
+  async function claim(id) {
+    var nurse = getNurse();
+    if (!nurse) return;
+    var res = await sb.from("visits")
+      .update({ claimed_by: nurse, claimed_at: new Date().toISOString() })
+      .eq("id", id).is("claimed_by", null).select();
+    if (res.error) { toast("Something went wrong — try again."); return; }
+    if (!res.data || !res.data.length) {
+      // someone beat us to it — refresh that row
+      var one = await sb.from("visits").select("*").eq("id", id).single();
+      if (one.data) { state.byId[id] && (function(){ var c = state.byId[id]; for (var k in one.data) c[k] = one.data[k]; })(); render(); }
+      toast("Just taken by someone else.");
+      return;
+    }
+    var c = state.byId[id]; var nw = res.data[0]; for (var k in nw) c[k] = nw[k];
+    render(); toast("You're signed up.");
+  }
+
+  async function release(id) {
+    var res = await sb.from("visits")
+      .update({ claimed_by: null, claimed_at: null })
+      .eq("id", id).select();
+    if (res.error) { toast("Something went wrong — try again."); return; }
+    if (res.data && res.data.length) { var c = state.byId[id], nw = res.data[0]; for (var k in nw) c[k] = nw[k]; }
+    render(); toast("Sign-up removed.");
+  }
+
+  // ---- rendering ----
+  function renderWhoami() {
+    var w = el("whoami");
+    if (state.nurse) {
+      w.innerHTML = 'Signing up as <b>' + esc(state.nurse) + '</b> <button id="chg">change</button>';
+    } else {
+      w.innerHTML = '<button id="chg">Set your name</button>';
+    }
+    var b = document.getElementById("chg"); if (b) b.onclick = changeNurse;
+  }
+
+  function renderFoot() {
+    el("foot").innerHTML =
+      '<span class="live-dot ' + (state.live ? "" : "off") + '"></span>' +
+      (state.live ? "Live · updates for everyone in real time" : "Shared with all nurses on this schedule");
+  }
+
+  function render() {
+    if (state.selectedDate) renderDay(); else renderMonth();
+    renderFoot();
+  }
+
+  function renderMonth() {
+    el("header").innerHTML =
+      '<div class="hdr">' +
+        '<div class="eyebrow">Nurse Visit Sign-Up · ' + esc(MONTH_LABEL) + '</div>' +
+        '<div class="title">Pick a day to sign up</div>' +
+      '</div>';
+    var dates = datesList();
+    var cells = "";
+    for (var i = 0; i < dates.length; i++) {
+      var iso = dates[i], d = parseDate(iso), c = countFor(iso);
+      var cls = c.claimed === 0 ? "zero" : (c.claimed >= c.total ? "full" : "some");
+      cells +=
+        '<button class="day" data-date="' + iso + '">' +
+          '<span class="dow">' + DOW[d.getDay()] + '</span>' +
+          '<span class="num">' + d.getDate() + '</span>' +
+          '<span class="cnt ' + cls + '">' + c.claimed + '/' + c.total + '</span>' +
+        '</button>';
+    }
+    el("content").innerHTML =
+      '<div class="gridwrap fade"><div class="grid">' + cells + '</div>' +
+      '<div class="hint">Tap a day to view visits and sign up · updates live for everyone</div></div>';
+    var btns = el("content").querySelectorAll(".day");
+    for (var j = 0; j < btns.length; j++) {
+      btns[j].onclick = (function (iso) { return function () { state.selectedDate = iso; window.scrollTo(0,0); render(); }; })(btns[j].getAttribute("data-date"));
+    }
+  }
+
+  function renderDay() {
+    var iso = state.selectedDate, d = parseDate(iso), c = countFor(iso);
+    el("header").innerHTML =
+      '<div class="hdr">' +
+        '<div class="eyebrow">Nurse Visit Sign-Up · ' + esc(MONTH_LABEL) + '</div>' +
+        '<div class="backrow"><button class="back" id="backbtn">‹ Back to month</button></div>' +
+        '<div class="daytitle">' + DOW_LONG[d.getDay()] + ', ' + MONTHS[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear() + '</div>' +
+        '<div class="covered">' + c.claimed + '/' + c.total + ' covered</div>' +
+      '</div>';
+
+    var rows = state.visits.filter(function (v) { return v.visit_date === iso; })
+      .sort(function (a, b) { return a.sort_order - b.sort_order; });
+
+    var html = '<div class="daywrap fade">';
+    var lastSection = null;
+    for (var i = 0; i < rows.length; i++) {
+      var v = rows[i];
+      if (v.section !== lastSection) { html += '<div class="section-label">' + esc(v.section) + '</div>'; lastSection = v.section; }
+      var tparts = splitTime(v.time_label);
+      var claimed = !!v.claimed_by;
+      var mine = claimed && state.nurse && v.claimed_by.toLowerCase() === state.nurse.toLowerCase();
+      html +=
+        '<div class="visit' + (claimed ? " claimed" : "") + '">' +
+          '<div class="vtime"><span class="t">' + esc(tparts[0]) + '</span><span class="ap">' + esc(tparts[1]) + '</span></div>' +
+          '<div class="vbody">' +
+            '<div><span class="vpatient">' + esc(v.patient_name || "Visit") + '</span>' +
+              (v.location ? '<span class="vloc">' + esc(v.location) + '</span>' : '') + '</div>' +
+            (v.task ? '<div class="vtask">' + esc(v.task) + '</div>' : '') +
+            (claimed
+              ? '<div class="claimed-by"><span class="tag">✓ ' + esc(v.claimed_by) + '</span>' +
+                  '<button class="release" data-id="' + v.id + '">' + (mine ? "Cancel my sign-up" : "Remove") + '</button></div>'
+              : '<div class="vaction"><button class="btn-signup" data-id="' + v.id + '">Sign up for this visit</button></div>') +
+          '</div>' +
+        '</div>';
+    }
+    html += '</div>';
+    el("content").innerHTML = html;
+
+    var back = document.getElementById("backbtn");
+    if (back) back.onclick = function () { state.selectedDate = null; window.scrollTo(0,0); render(); };
+    var signs = el("content").querySelectorAll(".btn-signup");
+    for (var s = 0; s < signs.length; s++) signs[s].onclick = (function (id) { return function () { claim(id); }; })(signs[s].getAttribute("data-id"));
+    var rels = el("content").querySelectorAll(".release");
+    for (var r = 0; r < rels.length; r++) rels[r].onclick = (function (id) { return function () { if (window.confirm("Remove this sign-up?")) release(id); }; })(rels[r].getAttribute("data-id"));
+  }
+
+  function splitTime(label) {
+    // "6:00 AM" -> ["6:00","AM"]
+    var m = String(label || "").match(/^(.*?)\s*(AM|PM)?$/i);
+    if (m && m[2]) return [m[1], m[2].toUpperCase()];
+    return [label || "", ""];
+  }
+
+  // ---- boot ----
+  renderWhoami();
+  renderFoot();
+  loadAll();
+  subscribeLive();
+})();
+</script>
+</body>
+</html>
