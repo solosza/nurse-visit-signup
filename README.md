@@ -17,4 +17,7 @@ The visit schedule (days, times, patients, tasks) lives in the `visits` table in
 
 ## Notes / next steps
 - No login yet — anyone with the link can view and sign up. Add auth or a passcode before using with real patient data.
+- Anyone can currently remove anyone else's sign-up.
 - To change the month or schedule, update the `visits` table (or re-seed via the SQL in the project notes).
+
+Planned work, the constraints behind it, and the known defects: **[ROADMAP.md](ROADMAP.md)**.
