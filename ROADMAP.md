@@ -84,17 +84,32 @@ Features 2, 4, 8 and the cancel-ownership fix all depend on knowing which nurse 
 A timesheet that totals hours is payroll-adjacent and cannot rest on a string a user can
 retype at will. **Decide identity before building anything that reads it.**
 
-### 4. Auth must land before patient data
+### 4. Patient data is ALREADY publicly readable — this is remediation, not prevention
 
-Feature 6 (passcode) and feature 7 (patient info, facility address) are ordered, not
-independent.
+**Corrected 2026-08-19.** This section previously said adding patient details *would* put
+PHI behind a public URL. That was wrong in tense. It is already there.
 
-The `visits` table is world-readable through the publishable key. Adding patient details
-puts PHI behind a public URL. A client-side passcode prompt **does not** protect it: the
-key is in the page source, so anyone can query Supabase directly and never see the prompt.
-Real protection is Supabase Auth plus RLS policies keyed to an authenticated session.
+Measured, not inferred: an anonymous request using only the publishable key that is in the
+page source returns **341 rows**, containing **4 distinct patient first names**, **6 care
+task descriptions** (e.g. "All vitals & breathing treatment"), **10 nurse names**, and **3
+locations**. No login, no passcode, no dashboard access. Anyone who opens View Source on
+the live site has everything needed to do the same:
 
-Ship the auth work before the patient-data work. Do not let these two swap order.
+```
+curl -H "apikey: <the key in index.html>" \
+  "https://<project>.supabase.co/rest/v1/visits?select=*"
+```
+
+So feature 6 is not a precaution taken before feature 7 — it is a fix for a live condition.
+
+A client-side passcode prompt **does not** address it. The key is in the page source, so
+anyone can query Supabase directly and never load the page at all. Gating the HTML gates
+nothing. Real protection is Supabase Auth plus RLS policies keyed to an authenticated
+session, so that the anon role can read nothing.
+
+Note the tension with a fix: the nurses currently using the live sheet depend on anon
+access working. Tightening RLS without shipping auth in the same change locks them out.
+That is why step 2 in the build order is auth **and** identity together, not RLS alone.
 
 ---
 
@@ -108,6 +123,7 @@ Found while reading the code on 2026-08-19. None are fixed yet.
 | D2 | Realtime ignores DELETE events. The handler reads `payload.new`, which is empty on a delete, so a deleted row stays on screen until a manual refresh. | `index.html`, `subscribeLive()` |
 | D3 | `MONTH_LABEL` is hardcoded `"August 2026"`. The grid renders whatever dates exist in the table, so the header will lie as soon as the data moves on. Blocks feature 1. | `index.html` |
 | D4 | `CAPACITY = 11` is declared and never used. Dead constant — remove it or wire it up. | `index.html` |
+| D5 | **Live data exposure.** 341 rows — patient first names, care tasks, nurse names, locations — are readable by any anonymous request carrying the publishable key from the page source. Measured 2026-08-19, not inferred. See constraint 4. This is the highest-severity item on this page and it is live right now. | Supabase RLS on `visits` |
 
 ---
 
