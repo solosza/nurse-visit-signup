@@ -3,7 +3,9 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-<title>Nurse Visit Sign-Up · August 2026</title>
+<!-- No month here: render() sets the real period once the data is loaded. A hardcoded
+     month in the static title lies before the first load and stays lying if it fails. -->
+<title>Nurse Visit Sign-Up</title>
 <style>
   :root {
     --bg: #FBF9F7;
@@ -134,9 +136,22 @@
     background: var(--green); margin-right: 5px; vertical-align: middle;
   }
   .live-dot.off { background: var(--muted2); }
+
+  /* Dev-data banner. Deliberately loud: a staging page that looks identical to
+     the live one is worse than no staging page, because you cannot tell which
+     data you are about to change. */
+  .envbar {
+    background: #8A4B2A; color: #fff; font-size: 12px; font-weight: 700;
+    text-align: center; padding: 7px 14px; letter-spacing: 0.04em;
+  }
+  .envbar code {
+    background: rgba(255,255,255,0.18); padding: 1px 5px; border-radius: 4px;
+    font-size: 11.5px;
+  }
 </style>
 </head>
 <body>
+<div id="envbar"></div>
 <div class="wrap">
   <div id="header"></div>
   <div id="whoami" class="whoami"></div>
@@ -154,8 +169,23 @@
 
   var SUPABASE_URL = "https://toqcipuepxdmlhkpjozw.supabase.co";
   var SUPABASE_KEY = "sb_publishable_hKZKOQGTihooRc4InIU0VA_19KqKGoM";
-  var MONTH_LABEL = "August 2026";
-  var CAPACITY = 11;
+
+  // --- which data does this page talk to? ---
+  //
+  // This page is a static file, so a git branch protects the HTML and nothing
+  // else: a branch copy opened on a laptop still writes to real sign-ups unless
+  // it is pointed somewhere else. The default is therefore INVERTED. Only the
+  // real published URL gets the live table; everywhere else -- localhost,
+  // file://, a staging repo -- gets the dev copy. You have to actually be on
+  // the live site to touch live data by accident.
+  //
+  //   ?dev=1    force the dev table, including on the live site
+  //   ?prod=1   force the live table, e.g. to read prod from a local checkout
+  var IS_LIVE_SITE = location.hostname === "solosza.github.io" &&
+                     location.pathname.indexOf("/nurse-visit-signup/") === 0;
+  var USE_DEV = /[?&]dev=1/.test(location.search) ||
+                (!/[?&]prod=1/.test(location.search) && !IS_LIVE_SITE);
+  var TABLE = USE_DEV ? "visits_dev" : "visits";
 
   var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -228,17 +258,41 @@
     return out;
   }
 
+  // The label follows the data instead of being hardcoded, so the header cannot
+  // go on claiming "August 2026" once the schedule moves past August. Handles a
+  // span, because an ongoing schedule will routinely cross a month boundary.
+  function periodLabel() {
+    var dates = datesList();
+    if (!dates.length) return "";
+    var a = parseDate(dates[0]), b = parseDate(dates[dates.length - 1]);
+    if (a.getFullYear() === b.getFullYear()) {
+      if (a.getMonth() === b.getMonth()) return MONTHS[a.getMonth()] + " " + a.getFullYear();
+      return MONTHS[a.getMonth()] + " – " + MONTHS[b.getMonth()] + " " + a.getFullYear();
+    }
+    return MONTHS[a.getMonth()] + " " + a.getFullYear() + " – " + MONTHS[b.getMonth()] + " " + b.getFullYear();
+  }
+
   async function loadAll() {
-    var res = await sb.from("visits").select("*").order("visit_date", { ascending: true }).order("sort_order", { ascending: true });
-    if (res.error) { el("content").innerHTML = '<div class="loading">Could not load the schedule. Please refresh.</div>'; return; }
+    var res = await sb.from(TABLE).select("*").order("visit_date", { ascending: true }).order("sort_order", { ascending: true });
+    if (res.error) {
+      // Name the table in the message. On the dev copy the overwhelmingly likely
+      // cause is that the migration has not been run yet, and "please refresh"
+      // sends you round that loop forever.
+      el("content").innerHTML =
+        '<div class="loading">Could not load the schedule from <b>' + esc(TABLE) + '</b>.<br>' +
+        esc(res.error.message || "Unknown error") +
+        (USE_DEV ? '<br><br>If this table does not exist yet, run <code>db/001-create-dev-tables.sql</code> in the Supabase SQL editor.' : '') +
+        '</div>';
+      return;
+    }
     state.visits = res.data || [];
     indexVisits();
     render();
   }
 
   function subscribeLive() {
-    sb.channel("visits-live")
-      .on("postgres_changes", { event: "*", schema: "public", table: "visits" }, function (payload) {
+    sb.channel("visits-live-" + TABLE)
+      .on("postgres_changes", { event: "*", schema: "public", table: TABLE }, function (payload) {
         var row = payload.new;
         if (!row || !row.id) return;
         if (state.byId[row.id]) {
@@ -260,13 +314,13 @@
   async function claim(id) {
     var nurse = getNurse();
     if (!nurse) return;
-    var res = await sb.from("visits")
+    var res = await sb.from(TABLE)
       .update({ claimed_by: nurse, claimed_at: new Date().toISOString() })
       .eq("id", id).is("claimed_by", null).select();
     if (res.error) { toast("Something went wrong — try again."); return; }
     if (!res.data || !res.data.length) {
       // someone beat us to it — refresh that row
-      var one = await sb.from("visits").select("*").eq("id", id).single();
+      var one = await sb.from(TABLE).select("*").eq("id", id).single();
       if (one.data) { state.byId[id] && (function(){ var c = state.byId[id]; for (var k in one.data) c[k] = one.data[k]; })(); render(); }
       toast("Just taken by someone else.");
       return;
@@ -276,7 +330,7 @@
   }
 
   async function release(id) {
-    var res = await sb.from("visits")
+    var res = await sb.from(TABLE)
       .update({ claimed_by: null, claimed_at: null })
       .eq("id", id).select();
     if (res.error) { toast("Something went wrong — try again."); return; }
@@ -304,12 +358,14 @@
   function render() {
     if (state.selectedDate) renderDay(); else renderMonth();
     renderFoot();
+    var p = periodLabel();
+    document.title = "Nurse Visit Sign-Up" + (p ? " · " + p : "") + (USE_DEV ? " [DEV]" : "");
   }
 
   function renderMonth() {
     el("header").innerHTML =
       '<div class="hdr">' +
-        '<div class="eyebrow">Nurse Visit Sign-Up · ' + esc(MONTH_LABEL) + '</div>' +
+        '<div class="eyebrow">Nurse Visit Sign-Up · ' + esc(periodLabel()) + '</div>' +
         '<div class="title">Pick a day to sign up</div>' +
       '</div>';
     var dates = datesList();
@@ -337,7 +393,7 @@
     var iso = state.selectedDate, d = parseDate(iso), c = countFor(iso);
     el("header").innerHTML =
       '<div class="hdr">' +
-        '<div class="eyebrow">Nurse Visit Sign-Up · ' + esc(MONTH_LABEL) + '</div>' +
+        '<div class="eyebrow">Nurse Visit Sign-Up · ' + esc(periodLabel()) + '</div>' +
         '<div class="backrow"><button class="back" id="backbtn">‹ Back to month</button></div>' +
         '<div class="daytitle">' + DOW_LONG[d.getDay()] + ', ' + MONTHS[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear() + '</div>' +
         '<div class="covered">' + c.claimed + '/' + c.total + ' covered</div>' +
@@ -386,7 +442,15 @@
     return [label || "", ""];
   }
 
+  function renderEnvBar() {
+    if (!USE_DEV) return;                       // live site shows nothing
+    el("envbar").className = "envbar";
+    el("envbar").innerHTML =
+      'DEV DATA · reading and writing <code>' + esc(TABLE) + '</code> · real sign-ups are not affected';
+  }
+
   // ---- boot ----
+  renderEnvBar();
   renderWhoami();
   renderFoot();
   loadAll();
