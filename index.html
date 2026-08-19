@@ -148,6 +148,17 @@
     background: rgba(255,255,255,0.18); padding: 1px 5px; border-radius: 4px;
     font-size: 11.5px;
   }
+
+  /* Passcode gate */
+  .gate { padding: 28px 20px; text-align: center; }
+  .gatetext { font-size: 13.5px; color: #55505A; margin: 0 0 16px; line-height: 1.5; }
+  .gaterow { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .gaterow input {
+    flex: 1 1 200px; max-width: 260px; font-size: 16px; /* 16px stops iOS zooming on focus */
+    padding: 9px 12px; border: 1.5px solid var(--card-border); border-radius: 8px;
+    background: #fff; color: var(--ink);
+  }
+  .gateerr { font-size: 12.5px; color: var(--pink); font-weight: 600; margin: 14px 0 0; }
 </style>
 </head>
 <body>
@@ -194,7 +205,8 @@
     byId: {},              // id -> row
     selectedDate: null,    // 'YYYY-MM-DD' or null (month view)
     nurse: localStorage.getItem("nurseName") || "",
-    live: false
+    live: false,
+    locked: false          // true while the passcode gate is showing
   };
 
   var MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -272,9 +284,26 @@
     return MONTHS[a.getMonth()] + " " + a.getFullYear() + " – " + MONTHS[b.getMonth()] + " " + b.getFullYear();
   }
 
+  // A refusal caused by not being signed in, as opposed to a genuine error.
+  // Postgres returns 42501 for a missing privilege; PostgREST surfaces RLS
+  // refusals as PGRST301/401. Anything else is a real fault and must not be
+  // disguised as a login prompt.
+  function isAuthError(err) {
+    if (!err) return false;
+    var code = String(err.code || "");
+    return code === "42501" || code === "PGRST301" || err.status === 401 ||
+           /permission denied|jwt|not authorized/i.test(err.message || "");
+  }
+
   async function loadAll() {
     var res = await sb.from(TABLE).select("*").order("visit_date", { ascending: true }).order("sort_order", { ascending: true });
     if (res.error) {
+      // Not signed in -> ask for the passcode rather than showing an error.
+      // This is what makes the rollout need no coordinated deploy: while the
+      // table is still readable anonymously the gate never appears, and the
+      // moment 003b restricts it, every page starts asking. Same file either way.
+      if (isAuthError(res.error)) { renderPasscodeGate(); return; }
+
       // Name the table in the message. On the dev copy the overwhelmingly likely
       // cause is that the migration has not been run yet, and "please refresh"
       // sends you round that loop forever.
@@ -286,8 +315,65 @@
       return;
     }
     state.visits = res.data || [];
+    state.locked = false;
     indexVisits();
     render();
+  }
+
+  // ---- passcode gate ----
+  //
+  // The passcode is the password of one shared Supabase Auth account. It is
+  // never stored in this file: the page collects it, exchanges it for a session,
+  // and supabase-js keeps that session in localStorage so it survives reloads.
+  // Gating the markup would protect nothing on its own -- the data is served by
+  // PostgREST and the publishable key is public -- so the real control is the RLS
+  // policy behind it. This screen is how a nurse gets past that policy, not the
+  // policy itself.
+  var SHARED_ACCOUNT = "nurses@nursevisitsignup.app";
+
+  function renderPasscodeGate(message) {
+    state.locked = true;
+    el("header").innerHTML =
+      '<div class="hdr">' +
+        '<div class="eyebrow">Nurse Visit Sign-Up</div>' +
+        '<div class="title">Enter the passcode</div>' +
+      '</div>';
+    el("whoami").innerHTML = "";
+    el("content").innerHTML =
+      '<div class="gate fade">' +
+        '<p class="gatetext">This schedule is private. Enter the passcode your coordinator gave you.</p>' +
+        '<div class="gaterow">' +
+          '<input id="pc" type="password" inputmode="text" autocomplete="current-password" ' +
+                 'placeholder="passcode" aria-label="Passcode" />' +
+          '<button id="pcgo" class="btn-signup">Enter</button>' +
+        '</div>' +
+        (message ? '<p class="gateerr">' + esc(message) + '</p>' : '') +
+      '</div>';
+    var input = el("pc"), go = el("pcgo");
+    var submit = async function () {
+      var code = (input.value || "").trim();
+      if (!code) return;
+      go.disabled = true; go.textContent = "Checking…";
+      var res = await sb.auth.signInWithPassword({ email: SHARED_ACCOUNT, password: code });
+      if (res.error) {
+        renderPasscodeGate("That passcode was not recognised.");
+        return;
+      }
+      state.signedIn = true;
+      el("content").innerHTML = '<div class="loading"><div class="spinner"></div>Loading schedule…</div>';
+      await loadAll();
+      renderWhoami();             // now that a session exists, offer sign-out
+      subscribeLive();            // the boot subscription, if any, was made without a session
+    };
+    go.onclick = submit;
+    input.onkeydown = function (e) { if (e.key === "Enter") submit(); };
+    input.focus();
+  }
+
+  async function signOut() {
+    await sb.auth.signOut();
+    state.visits = []; state.byId = {}; state.selectedDate = null; state.signedIn = false;
+    renderPasscodeGate();
   }
 
   function subscribeLive() {
@@ -341,12 +427,17 @@
   // ---- rendering ----
   function renderWhoami() {
     var w = el("whoami");
+    if (state.locked) { w.innerHTML = ""; return; }
     if (state.nurse) {
       w.innerHTML = 'Signing up as <b>' + esc(state.nurse) + '</b> <button id="chg">change</button>';
     } else {
       w.innerHTML = '<button id="chg">Set your name</button>';
     }
+    // Only offer sign-out once a session actually exists, so the control does not
+    // appear on a page that never required one.
+    if (state.signedIn) w.innerHTML += ' <button id="sout">sign out</button>';
     var b = document.getElementById("chg"); if (b) b.onclick = changeNurse;
+    var s = document.getElementById("sout"); if (s) s.onclick = signOut;
   }
 
   function renderFoot() {
@@ -450,11 +541,22 @@
   }
 
   // ---- boot ----
-  renderEnvBar();
-  renderWhoami();
-  renderFoot();
-  loadAll();
-  subscribeLive();
+  //
+  // getSession() must be awaited before the first query. supabase-js restores a
+  // persisted session ASYNCHRONOUSLY, so firing loadAll() immediately would run
+  // it as `anon` even for a nurse who signed in yesterday -- which would show the
+  // passcode gate to someone already holding a valid session, every reload.
+  (async function boot() {
+    renderEnvBar();
+    renderFoot();
+    try {
+      var sess = await sb.auth.getSession();
+      state.signedIn = !!(sess && sess.data && sess.data.session);
+    } catch (e) { state.signedIn = false; }
+    renderWhoami();
+    await loadAll();
+    if (!state.locked) subscribeLive();
+  })();
 })();
 </script>
 </body>
