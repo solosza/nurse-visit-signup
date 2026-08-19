@@ -113,17 +113,47 @@ That is why step 2 in the build order is auth **and** identity together, not RLS
 
 ---
 
+## Current state (2026-08-19)
+
+| Item | Status |
+|------|--------|
+| Dev/prod data split (`visits_dev`) | **done**, live |
+| Month label derived from data (D3) | **done**, live |
+| Dead `CAPACITY` constant (D4) | **done**, live |
+| Anonymous WRITE scoped to claim columns | **done**, live on both tables |
+| Latent TRUNCATE/REFERENCES/TRIGGER grants | **done**, revoked on both tables |
+| Passcode gate in the page | **shipped but dormant** — appears only once `003b` runs |
+| Anonymous READ of patient data (D5) | **still open** — one command away, see below |
+| Cancel-ownership (D1) | still open, needs per-nurse identity |
+| Realtime DELETE handling (D2) | still open |
+| Features 1–5, 7–9 | not started |
+
+### The one command left, and why it is not run yet
+
+`db/003-require-auth.sql` section **003b** is commented out. Running it restricts
+`visits` to authenticated readers and closes D5 completely.
+
+**It locks out every nurse who does not yet have the passcode.** That is a real
+disruption to a live scheduling tool, and distributing the passcode is a human
+step. So: tell the nurses the passcode, then uncomment 003b and run it. The page
+already handles both states — no redeploy is needed at cutover.
+
+The shared account is `nurses@nursevisitsignup.app`; its password is the passcode,
+and it can be changed any time in Supabase → Authentication → Users.
+
+---
+
 ## Known defects
 
-Found while reading the code on 2026-08-19. None are fixed yet.
+Found while reading the code on 2026-08-19.
 
 | # | Defect | Where |
 |---|--------|-------|
 | D1 | Any nurse can remove any other nurse's sign-up — `release()` has no ownership check, and for someone else's claim the button reads "Remove" with only a `confirm()` in the way. Needs a client guard **and** an RLS policy; the client guard alone is cosmetic. | `index.html`, `release()` |
 | D2 | Realtime ignores DELETE events. The handler reads `payload.new`, which is empty on a delete, so a deleted row stays on screen until a manual refresh. | `index.html`, `subscribeLive()` |
-| D3 | `MONTH_LABEL` is hardcoded `"August 2026"`. The grid renders whatever dates exist in the table, so the header will lie as soon as the data moves on. Blocks feature 1. | `index.html` |
-| D4 | `CAPACITY = 11` is declared and never used. Dead constant — remove it or wire it up. | `index.html` |
-| D5 | **Live data exposure.** 341 rows — patient first names, care tasks, nurse names, locations — are readable by any anonymous request carrying the publishable key from the page source. Measured 2026-08-19, not inferred. See constraint 4. This is the highest-severity item on this page and it is live right now. | Supabase RLS on `visits` |
+| D3 | ~~FIXED 2026-08-19~~ `MONTH_LABEL` was hardcoded `"August 2026"`. The grid renders whatever dates exist in the table, so the header will lie as soon as the data moves on. Blocks feature 1. | `index.html` |
+| D4 | ~~FIXED 2026-08-19~~ `CAPACITY = 11` was declared and never used. Dead constant — remove it or wire it up. | `index.html` |
+| D5 | **WRITE half fixed 2026-08-19; READ half still open.** Live data exposure. 341 rows — patient first names, care tasks, nurse names, locations — are readable by any anonymous request carrying the publishable key from the page source. Measured 2026-08-19, not inferred. See constraint 4. This is the highest-severity item on this page and it is live right now. | Supabase RLS on `visits` |
 
 ---
 
