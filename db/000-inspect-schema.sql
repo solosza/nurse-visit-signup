@@ -43,7 +43,9 @@ select info from (
   -- is RLS on, and what replica identity does realtime have to work with
   select 'D_TABLE      | rls_enabled=' || relrowsecurity::text
        || ' | rls_forced='            || relforcerowsecurity::text
-       || ' | replica_identity='      || relreplident
+       || ' | replica_identity='      || relreplident::text  -- pg "char" type: the cast is
+                                                            -- required, or `text || "char"`
+                                                            -- is ambiguous and errors 42725
   from pg_class
   where oid = 'public.visits'::regclass
 
