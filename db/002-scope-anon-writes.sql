@@ -47,8 +47,8 @@ grant  update (claimed_by, claimed_at) on public.visits_dev to anon, authenticat
 -- ===========================================================================
 -- 002b -- the live table. Uncomment and run once 002a is verified.
 -- ===========================================================================
--- revoke update, insert, delete on public.visits from anon, authenticated;
--- grant  update (claimed_by, claimed_at) on public.visits to anon, authenticated;
+revoke update, insert, delete on public.visits from anon, authenticated;
+grant  update (claimed_by, claimed_at) on public.visits to anon, authenticated;
 
 -- ===========================================================================
 -- Verification -- what anon and authenticated may actually write, per column.
