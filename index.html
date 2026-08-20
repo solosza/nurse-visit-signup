@@ -739,7 +739,11 @@
       return;
     }
 
-    var NO_FAC = " ";              // sorts first, replaced by a label on render
+    // Sentinel for "no facility". Written as an ESCAPE, not a literal character:
+    // the first version of this line used a raw control character, which put a NUL
+    // byte in the shipped HTML and made git and grep treat the file as binary.
+    // U+FFFF sorts last, so a real facility always beats "unassigned".
+    var NO_FAC = "￿";
     var groups = {};
     rows.forEach(function (v) {
       var k = v.location || NO_FAC;
@@ -747,28 +751,49 @@
     });
     var keys = Object.keys(groups).sort();
 
-    var html = '<div class="daywrap fade">';
+    // A compact day grid per facility, not every visit as a full card. Listing
+    // them all is accurate and unreadable -- August is 341 visits, a wall of
+    // cards nobody scans. What this view is for is seeing at a glance which
+    // facility is short of cover on which day. Tapping a day opens the existing
+    // day view for the detail.
+    var html = '<div class="gridwrap fade">';
     keys.forEach(function (k) {
-      var list = groups[k].sort(function (a, b) {
-        return a.visit_date < b.visit_date ? -1 : a.visit_date > b.visit_date ? 1 : a.sort_order - b.sort_order;
-      });
+      var list = groups[k];
       var taken = list.filter(function (v) { return v.claimed_by; }).length;
+      var byDay = {};
+      list.forEach(function (v) {
+        var slot = (byDay[v.visit_date] = byDay[v.visit_date] || { total: 0, claimed: 0 });
+        slot.total++; if (v.claimed_by) slot.claimed++;
+      });
+      var days = Object.keys(byDay).sort();
       html +=
         '<div class="fachead">' +
           '<span class="facname">' + esc(k === NO_FAC ? "No facility listed" : k) + '</span>' +
           '<span class="faccount">' + taken + '/' + list.length + ' covered</span>' +
-        '</div>';
-      var lastDate = null;
-      list.forEach(function (v) {
-        if (v.visit_date !== lastDate) {
-          html += '<div class="facday">' + esc(longDate(v.visit_date)) + '</div>';
-          lastDate = v.visit_date;
-        }
-        html += visitCardHTML(v, { hideLocation: true });
+        '</div>' +
+        '<div class="grid">';
+      days.forEach(function (iso) {
+        var c = byDay[iso], d = parseDate(iso);
+        var cls = c.claimed === 0 ? "zero" : (c.claimed >= c.total ? "full" : "some");
+        html +=
+          '<button class="day" data-date="' + iso + '">' +
+            '<span class="dow">' + DOW[d.getDay()] + '</span>' +
+            '<span class="num">' + d.getDate() + '</span>' +
+            '<span class="cnt ' + cls + '">' + c.claimed + '/' + c.total + '</span>' +
+          '</button>';
       });
+      html += '</div>';
     });
-    el("content").innerHTML = html + '</div>';
-    wireTabs(); wireMonthNav(); wireVisitButtons();
+    html += '<div class="hint">Counts are for that facility on that day · tap a day for the full list</div></div>';
+    el("content").innerHTML = html;
+
+    var fbtns = el("content").querySelectorAll(".day");
+    for (var j = 0; j < fbtns.length; j++) {
+      fbtns[j].onclick = (function (iso) {
+        return function () { state.selectedDate = iso; window.scrollTo(0, 0); render(); };
+      })(fbtns[j].getAttribute("data-date"));
+    }
+    wireTabs(); wireMonthNav();
   }
 
   function renderDay() {
