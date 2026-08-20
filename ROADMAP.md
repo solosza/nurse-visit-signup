@@ -123,10 +123,18 @@ That is why step 2 in the build order is auth **and** identity together, not RLS
 | Anonymous WRITE scoped to claim columns | **done**, live on both tables |
 | Latent TRUNCATE/REFERENCES/TRIGGER grants | **done**, revoked on both tables |
 | Passcode gate in the page | **shipped but dormant** — appears only once `003b` runs |
+| Feature 1 — ongoing months | **done**, live |
+| Feature 4 — "my visits" | **done**, live |
+| Feature 5 — by-facility calendar | **done**, live |
 | Anonymous READ of patient data (D5) | **still open** — one command away, see below |
 | Cancel-ownership (D1) | still open, needs per-nurse identity |
 | Realtime DELETE handling (D2) | still open |
-| Features 1–5, 7–9 | not started |
+| Features 2, 3, 7, 8, 9 | not started |
+
+Features 2 (colour coding) and 8 (timesheet) are blocked on identity, not on
+effort: the shared passcode cannot tell two nurses apart, and "my visits" already
+matches on a name in `localStorage` rather than a person. Features 3 and 7 need
+schema changes. Feature 9 needs the `.ics`-versus-Google-API decision.
 
 ### The one command left, and why it is not run yet
 
