@@ -159,6 +159,53 @@
     background: #fff; color: var(--ink);
   }
   .gateerr { font-size: 12.5px; color: var(--pink); font-weight: 600; margin: 14px 0 0; }
+
+  /* View switcher */
+  .tabs { display: flex; gap: 6px; margin-top: 14px; flex-wrap: wrap; }
+  .tab {
+    background: rgba(255,255,255,0.14); border: none; color: var(--bg);
+    font-size: 12.5px; font-weight: 700; padding: 6px 11px; border-radius: 999px;
+    cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .tab:hover { background: rgba(255,255,255,0.24); }
+  .tab.on { background: var(--bg); color: #4A3F55; }
+  .pill {
+    background: var(--pink); color: #fff; font-size: 10.5px; font-weight: 700;
+    border-radius: 999px; padding: 1px 6px; min-width: 16px; text-align: center;
+  }
+  .tab.on .pill { background: var(--pink); color: #fff; }
+
+  /* Month navigation */
+  .monthnav { display: flex; align-items: center; gap: 12px; margin-top: 2px; }
+  .mlabel { font-size: 20px; font-weight: 700; font-family: Georgia, serif; }
+  .mnav {
+    background: rgba(255,255,255,0.15); border: none; color: var(--bg);
+    font-size: 17px; line-height: 1; font-weight: 700; width: 30px; height: 30px;
+    border-radius: 8px; cursor: pointer;
+  }
+  .mnav:hover:not(:disabled) { background: rgba(255,255,255,0.28); }
+  .mnav:disabled { opacity: 0.28; cursor: default; }
+
+  /* Empty states */
+  .empty { text-align: center; padding: 44px 24px; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+  .emptyact { margin-top: 16px; }
+
+  /* Date line inside a card, used where the card is away from its day heading */
+  .vdate { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase;
+           letter-spacing: 0.06em; margin-bottom: 3px; }
+
+  /* Facility grouping */
+  .fachead {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+    margin: 22px 4px 4px; padding-bottom: 6px; border-bottom: 2px solid var(--card-border);
+  }
+  .fachead:first-child { margin-top: 6px; }
+  .facname { font-size: 16px; font-weight: 700; font-family: Georgia, serif; color: var(--ink); }
+  .faccount { font-size: 11.5px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+  .facday {
+    font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted);
+    font-weight: 700; margin: 14px 4px 7px;
+  }
 </style>
 </head>
 <body>
@@ -206,7 +253,9 @@
     selectedDate: null,    // 'YYYY-MM-DD' or null (month view)
     nurse: localStorage.getItem("nurseName") || "",
     live: false,
-    locked: false          // true while the passcode gate is showing
+    locked: false,         // true while the passcode gate is showing
+    view: "month",         // "month" | "mine" | "facility"
+    month: null            // 'YYYY-MM' currently shown; null until data loads
   };
 
   var MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -270,6 +319,62 @@
     return out;
   }
 
+  // ---- months ----
+  //
+  // The schedule is no longer assumed to be one month. Everything below works off
+  // whatever months actually exist in the data, so adding September rows is the
+  // only step needed to get a September view -- no code change, no redeploy.
+
+  function monthKey(iso) { return iso.slice(0, 7); }          // 'YYYY-MM-DD' -> 'YYYY-MM'
+
+  function monthsList() {
+    var seen = {}, out = [];
+    for (var i = 0; i < state.visits.length; i++) {
+      var k = monthKey(state.visits[i].visit_date);
+      if (!seen[k]) { seen[k] = 1; out.push(k); }
+    }
+    out.sort();
+    return out;
+  }
+
+  function monthTitle(ym) {
+    if (!ym) return "";
+    var p = ym.split("-");
+    return MONTHS[+p[1] - 1] + " " + p[0];
+  }
+
+  function datesInMonth(ym) {
+    return datesList().filter(function (d) { return monthKey(d) === ym; });
+  }
+
+  function visitsInMonth(ym) {
+    return state.visits.filter(function (v) { return monthKey(v.visit_date) === ym; });
+  }
+
+  // Land on the month the user is most likely to want: the one we are in, if it
+  // has visits; otherwise the next upcoming month; otherwise the most recent one.
+  // Falling back to "the first month in the table" would show August forever.
+  function defaultMonth() {
+    var months = monthsList();
+    if (!months.length) return null;
+    var now = new Date();
+    var thisMonth = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0");
+    if (months.indexOf(thisMonth) !== -1) return thisMonth;
+    for (var i = 0; i < months.length; i++) if (months[i] > thisMonth) return months[i];
+    return months[months.length - 1];
+  }
+
+  function isMine(v) {
+    return !!(v.claimed_by && state.nurse &&
+              v.claimed_by.trim().toLowerCase() === state.nurse.trim().toLowerCase());
+  }
+
+  function myVisits() {
+    return state.visits.filter(isMine).sort(function (a, b) {
+      return a.visit_date < b.visit_date ? -1 : a.visit_date > b.visit_date ? 1 : a.sort_order - b.sort_order;
+    });
+  }
+
   // The label follows the data instead of being hardcoded, so the header cannot
   // go on claiming "August 2026" once the schedule moves past August. Handles a
   // span, because an ongoing schedule will routinely cross a month boundary.
@@ -317,6 +422,9 @@
     state.visits = res.data || [];
     state.locked = false;
     indexVisits();
+    // Pick the month on first load, and re-pick if the current selection no
+    // longer exists -- the schedule can change under a page that stays open.
+    if (!state.month || monthsList().indexOf(state.month) === -1) state.month = defaultMonth();
     render();
   }
 
@@ -447,19 +555,112 @@
   }
 
   function render() {
-    if (state.selectedDate) renderDay(); else renderMonth();
+    if (state.selectedDate) renderDay();
+    else if (state.view === "mine") renderMine();
+    else if (state.view === "facility") renderFacility();
+    else renderMonth();
     renderFoot();
-    var p = periodLabel();
+    var p = state.month ? monthTitle(state.month) : periodLabel();
     document.title = "Nurse Visit Sign-Up" + (p ? " · " + p : "") + (USE_DEV ? " [DEV]" : "");
+  }
+
+  // The three top-level views. Rendered as part of the header so they survive
+  // every re-render, including the ones realtime triggers.
+  function tabsHTML() {
+    var mine = myVisits().length;
+    function tab(id, label) {
+      return '<button class="tab' + (state.view === id ? " on" : "") + '" data-view="' + id + '">' + label + '</button>';
+    }
+    return '<div class="tabs">' +
+      tab("month", "Schedule") +
+      tab("mine", "My visits" + (mine ? ' <span class="pill">' + mine + '</span>' : "")) +
+      tab("facility", "By facility") +
+    '</div>';
+  }
+
+  function wireTabs() {
+    var t = document.querySelectorAll(".tab");
+    for (var i = 0; i < t.length; i++) {
+      t[i].onclick = (function (v) {
+        return function () { state.view = v; state.selectedDate = null; window.scrollTo(0, 0); render(); };
+      })(t[i].getAttribute("data-view"));
+    }
+  }
+
+  // One visit card, used by the day view, My visits and By facility. Kept in a
+  // single function so the three views cannot drift apart, and so claim/release
+  // is wired the same way everywhere.
+  function visitCardHTML(v, opts) {
+    opts = opts || {};
+    var tparts = splitTime(v.time_label);
+    var claimed = !!v.claimed_by;
+    var mine = isMine(v);
+    return '<div class="visit' + (claimed ? " claimed" : "") + '">' +
+      '<div class="vtime"><span class="t">' + esc(tparts[0]) + '</span><span class="ap">' + esc(tparts[1]) + '</span></div>' +
+      '<div class="vbody">' +
+        (opts.showDate ? '<div class="vdate">' + esc(longDate(v.visit_date)) + '</div>' : '') +
+        '<div><span class="vpatient">' + esc(v.patient_name || "Visit") + '</span>' +
+          (opts.hideLocation || !v.location ? '' : '<span class="vloc">' + esc(v.location) + '</span>') + '</div>' +
+        (v.task ? '<div class="vtask">' + esc(v.task) + '</div>' : '') +
+        (claimed
+          ? '<div class="claimed-by"><span class="tag">✓ ' + esc(v.claimed_by) + '</span>' +
+              '<button class="release" data-id="' + v.id + '">' + (mine ? "Cancel my sign-up" : "Remove") + '</button></div>'
+          : '<div class="vaction"><button class="btn-signup" data-id="' + v.id + '">Sign up for this visit</button></div>') +
+      '</div>' +
+    '</div>';
+  }
+
+  function wireVisitButtons() {
+    var signs = el("content").querySelectorAll(".btn-signup");
+    for (var s = 0; s < signs.length; s++) {
+      signs[s].onclick = (function (id) { return function () { claim(id); }; })(signs[s].getAttribute("data-id"));
+    }
+    var rels = el("content").querySelectorAll(".release");
+    for (var r = 0; r < rels.length; r++) {
+      rels[r].onclick = (function (id) {
+        return function () { if (window.confirm("Remove this sign-up?")) release(id); };
+      })(rels[r].getAttribute("data-id"));
+    }
+  }
+
+  function longDate(iso) {
+    var d = parseDate(iso);
+    return DOW_LONG[d.getDay()] + ", " + MONTHS[d.getMonth()] + " " + d.getDate();
+  }
+
+  function monthNavHTML() {
+    var months = monthsList(), i = months.indexOf(state.month);
+    var prev = i > 0 ? months[i - 1] : null;
+    var next = i > -1 && i < months.length - 1 ? months[i + 1] : null;
+    return '<div class="monthnav">' +
+      '<button class="mnav" id="mprev"' + (prev ? ' data-m="' + prev + '"' : ' disabled') + '>‹</button>' +
+      '<span class="mlabel">' + esc(monthTitle(state.month)) + '</span>' +
+      '<button class="mnav" id="mnext"' + (next ? ' data-m="' + next + '"' : ' disabled') + '>›</button>' +
+    '</div>';
+  }
+
+  function wireMonthNav() {
+    ["mprev", "mnext"].forEach(function (id) {
+      var b = document.getElementById(id);
+      if (b && b.getAttribute("data-m")) {
+        b.onclick = function () { state.month = this.getAttribute("data-m"); window.scrollTo(0, 0); render(); };
+      }
+    });
   }
 
   function renderMonth() {
     el("header").innerHTML =
       '<div class="hdr">' +
-        '<div class="eyebrow">Nurse Visit Sign-Up · ' + esc(periodLabel()) + '</div>' +
-        '<div class="title">Pick a day to sign up</div>' +
+        '<div class="eyebrow">Nurse Visit Sign-Up</div>' +
+        monthNavHTML() +
+        tabsHTML() +
       '</div>';
-    var dates = datesList();
+    var dates = datesInMonth(state.month);
+    if (!dates.length) {
+      el("content").innerHTML = '<div class="empty fade">No visits scheduled for ' + esc(monthTitle(state.month)) + '.</div>';
+      wireTabs(); wireMonthNav();
+      return;
+    }
     var cells = "";
     for (var i = 0; i < dates.length; i++) {
       var iso = dates[i], d = parseDate(iso), c = countFor(iso);
@@ -478,6 +679,121 @@
     for (var j = 0; j < btns.length; j++) {
       btns[j].onclick = (function (iso) { return function () { state.selectedDate = iso; window.scrollTo(0,0); render(); }; })(btns[j].getAttribute("data-date"));
     }
+    wireTabs(); wireMonthNav();
+  }
+
+  // "Give me my schedule" -- every visit signed up for under the current name,
+  // across all months, not just the one being viewed. Grouped by date because
+  // that is how a shift is actually read.
+  function renderMine() {
+    var rows = myVisits();
+    el("header").innerHTML =
+      '<div class="hdr">' +
+        '<div class="eyebrow">Nurse Visit Sign-Up</div>' +
+        '<div class="title">' + (state.nurse ? esc(state.nurse) + "'s visits" : "My visits") + '</div>' +
+        (rows.length ? '<div class="covered">' + rows.length + ' visit' + (rows.length === 1 ? '' : 's') + ' signed up</div>' : '') +
+        tabsHTML() +
+      '</div>';
+
+    if (!state.nurse) {
+      el("content").innerHTML =
+        '<div class="empty fade">Set your name first and this will show everything you have signed up for.' +
+        '<div class="emptyact"><button class="btn-signup" id="setname">Set your name</button></div></div>';
+      wireTabs();
+      var sn = document.getElementById("setname"); if (sn) sn.onclick = changeNurse;
+      return;
+    }
+    if (!rows.length) {
+      el("content").innerHTML = '<div class="empty fade">You have not signed up for any visits yet.</div>';
+      wireTabs();
+      return;
+    }
+
+    var html = '<div class="daywrap fade">', lastDate = null;
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].visit_date !== lastDate) {
+        html += '<div class="section-label">' + esc(longDate(rows[i].visit_date)) + '</div>';
+        lastDate = rows[i].visit_date;
+      }
+      html += visitCardHTML(rows[i]);
+    }
+    el("content").innerHTML = html + '</div>';
+    wireTabs(); wireVisitButtons();
+  }
+
+  // Month calendar split by facility. Visits with no location are grouped under
+  // their own heading rather than dropped -- 124 of the 341 rows have none, and
+  // silently hiding a third of the schedule would be worse than an ugly heading.
+  function renderFacility() {
+    var rows = visitsInMonth(state.month);
+    el("header").innerHTML =
+      '<div class="hdr">' +
+        '<div class="eyebrow">Nurse Visit Sign-Up</div>' +
+        monthNavHTML() +
+        tabsHTML() +
+      '</div>';
+
+    if (!rows.length) {
+      el("content").innerHTML = '<div class="empty fade">No visits scheduled for ' + esc(monthTitle(state.month)) + '.</div>';
+      wireTabs(); wireMonthNav();
+      return;
+    }
+
+    // Sentinel for "no facility". Written as an ESCAPE, not a literal character:
+    // the first version of this line used a raw control character, which put a NUL
+    // byte in the shipped HTML and made git and grep treat the file as binary.
+    // U+FFFF sorts last, so a real facility always beats "unassigned".
+    var NO_FAC = "￿";
+    var groups = {};
+    rows.forEach(function (v) {
+      var k = v.location || NO_FAC;
+      (groups[k] = groups[k] || []).push(v);
+    });
+    var keys = Object.keys(groups).sort();
+
+    // A compact day grid per facility, not every visit as a full card. Listing
+    // them all is accurate and unreadable -- August is 341 visits, a wall of
+    // cards nobody scans. What this view is for is seeing at a glance which
+    // facility is short of cover on which day. Tapping a day opens the existing
+    // day view for the detail.
+    var html = '<div class="gridwrap fade">';
+    keys.forEach(function (k) {
+      var list = groups[k];
+      var taken = list.filter(function (v) { return v.claimed_by; }).length;
+      var byDay = {};
+      list.forEach(function (v) {
+        var slot = (byDay[v.visit_date] = byDay[v.visit_date] || { total: 0, claimed: 0 });
+        slot.total++; if (v.claimed_by) slot.claimed++;
+      });
+      var days = Object.keys(byDay).sort();
+      html +=
+        '<div class="fachead">' +
+          '<span class="facname">' + esc(k === NO_FAC ? "No facility listed" : k) + '</span>' +
+          '<span class="faccount">' + taken + '/' + list.length + ' covered</span>' +
+        '</div>' +
+        '<div class="grid">';
+      days.forEach(function (iso) {
+        var c = byDay[iso], d = parseDate(iso);
+        var cls = c.claimed === 0 ? "zero" : (c.claimed >= c.total ? "full" : "some");
+        html +=
+          '<button class="day" data-date="' + iso + '">' +
+            '<span class="dow">' + DOW[d.getDay()] + '</span>' +
+            '<span class="num">' + d.getDate() + '</span>' +
+            '<span class="cnt ' + cls + '">' + c.claimed + '/' + c.total + '</span>' +
+          '</button>';
+      });
+      html += '</div>';
+    });
+    html += '<div class="hint">Counts are for that facility on that day · tap a day for the full list</div></div>';
+    el("content").innerHTML = html;
+
+    var fbtns = el("content").querySelectorAll(".day");
+    for (var j = 0; j < fbtns.length; j++) {
+      fbtns[j].onclick = (function (iso) {
+        return function () { state.selectedDate = iso; window.scrollTo(0, 0); render(); };
+      })(fbtns[j].getAttribute("data-date"));
+    }
+    wireTabs(); wireMonthNav();
   }
 
   function renderDay() {
@@ -498,32 +814,14 @@
     for (var i = 0; i < rows.length; i++) {
       var v = rows[i];
       if (v.section !== lastSection) { html += '<div class="section-label">' + esc(v.section) + '</div>'; lastSection = v.section; }
-      var tparts = splitTime(v.time_label);
-      var claimed = !!v.claimed_by;
-      var mine = claimed && state.nurse && v.claimed_by.toLowerCase() === state.nurse.toLowerCase();
-      html +=
-        '<div class="visit' + (claimed ? " claimed" : "") + '">' +
-          '<div class="vtime"><span class="t">' + esc(tparts[0]) + '</span><span class="ap">' + esc(tparts[1]) + '</span></div>' +
-          '<div class="vbody">' +
-            '<div><span class="vpatient">' + esc(v.patient_name || "Visit") + '</span>' +
-              (v.location ? '<span class="vloc">' + esc(v.location) + '</span>' : '') + '</div>' +
-            (v.task ? '<div class="vtask">' + esc(v.task) + '</div>' : '') +
-            (claimed
-              ? '<div class="claimed-by"><span class="tag">✓ ' + esc(v.claimed_by) + '</span>' +
-                  '<button class="release" data-id="' + v.id + '">' + (mine ? "Cancel my sign-up" : "Remove") + '</button></div>'
-              : '<div class="vaction"><button class="btn-signup" data-id="' + v.id + '">Sign up for this visit</button></div>') +
-          '</div>' +
-        '</div>';
+      html += visitCardHTML(v);
     }
     html += '</div>';
     el("content").innerHTML = html;
 
     var back = document.getElementById("backbtn");
     if (back) back.onclick = function () { state.selectedDate = null; window.scrollTo(0,0); render(); };
-    var signs = el("content").querySelectorAll(".btn-signup");
-    for (var s = 0; s < signs.length; s++) signs[s].onclick = (function (id) { return function () { claim(id); }; })(signs[s].getAttribute("data-id"));
-    var rels = el("content").querySelectorAll(".release");
-    for (var r = 0; r < rels.length; r++) rels[r].onclick = (function (id) { return function () { if (window.confirm("Remove this sign-up?")) release(id); }; })(rels[r].getAttribute("data-id"));
+    wireVisitButtons();
   }
 
   function splitTime(label) {
