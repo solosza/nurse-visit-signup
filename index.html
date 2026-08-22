@@ -206,6 +206,64 @@
     font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted);
     font-weight: 700; margin: 14px 4px 7px;
   }
+
+  /* Facility calendar. Laid out like the paper version: weekday columns, dates
+     in the corner, every visit listed in its day cell. */
+  .calwrap { padding: 12px 10px 0; }
+  .calhead {
+    background: linear-gradient(135deg, #4A3F55 0%, #6B5570 100%);
+    color: var(--bg); border-radius: 10px 10px 0 0; padding: 12px 14px; margin-top: 22px;
+  }
+  .calhead:first-child { margin-top: 4px; }
+  .calmonth { font-size: 22px; font-weight: 700; font-family: Georgia, serif; line-height: 1.1; }
+  .calfac {
+    font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+    font-weight: 700; opacity: 0.9; margin-top: 3px;
+  }
+  .calpat { opacity: 0.75; font-weight: 600; }
+  .calsep { opacity: 0.45; font-weight: 400; }
+  .calcount { font-size: 11.5px; opacity: 0.8; font-weight: 600; margin-top: 4px; }
+
+  .calgrid {
+    display: grid; grid-template-columns: repeat(7, 1fr);
+    border: 1px solid var(--card-border); border-radius: 0 0 10px 10px;
+    overflow: hidden; background: var(--card-border); gap: 1px;
+  }
+  .caldow {
+    background: #EFEAE6; color: #6B6470; font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.06em; text-align: center; padding: 6px 2px;
+  }
+  .calcell {
+    background: #fff; min-height: 74px; padding: 4px 4px 6px; cursor: pointer;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .calcell:hover { background: #FCFAF8; }
+  .calcell.empty { background: #F7F4F1; cursor: default; }
+  .calcell.quiet { background: #FCFBFA; }
+  .caldate { font-size: 11px; font-weight: 700; color: var(--ink); text-align: right; opacity: 0.65; }
+  .calslot { font-size: 9.5px; line-height: 1.3; word-break: break-word; }
+  .caltime { color: var(--muted); font-weight: 700; }
+  /* Open slots are deliberately faint. They must be visible, because spotting an
+     unfilled visit is the whole job, but they must not shout over the names.
+     Some facilities have four open slots every single day. */
+  .calopen { color: #CFC7CC; font-weight: 600; font-style: italic; }
+  .calslot.free .caltime { color: #CFC7CC; font-weight: 600; }
+
+  /* The colour-coded nurse name. Same chip everywhere a name appears. */
+  .nchip {
+    display: inline-block; padding: 0 4px; border-radius: 3px;
+    font-weight: 700; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom;
+  }
+
+  /* Phones: the calendar is the point, so give it the full width and shrink the
+     type rather than letting cells collapse or scroll sideways. */
+  @media (max-width: 560px) {
+    .calwrap { padding: 10px 6px 0; }
+    .calcell { min-height: 62px; padding: 3px 2px 4px; }
+    .calslot { font-size: 8.5px; }
+    .caldate { font-size: 10px; }
+    .calmonth { font-size: 19px; }
+  }
 </style>
 </head>
 <body>
@@ -362,6 +420,123 @@
     if (months.indexOf(thisMonth) !== -1) return thisMonth;
     for (var i = 0; i < months.length; i++) if (months[i] > thisMonth) return months[i];
     return months[months.length - 1];
+  }
+
+  // ---- nurse colours ----
+  //
+  // Colours are DERIVED from the name, never stored and never configured. A new
+  // nurse gets a colour the first time she signs up, with no edit to this file
+  // and no row in any table. That is the whole point: adding people has to be
+  // free, because it will happen constantly and nobody is going to come back
+  // here to maintain a list.
+  //
+  // The hash is deterministic, so the same name always gets the same colour on
+  // every device and every reload.
+  var NURSE_COLOURS = [
+    { bg: "#FFF3A3", fg: "#4A3F00" },   // yellow
+    { bg: "#A8E6CF", fg: "#0B3D2E" },   // green
+    { bg: "#AEE7F8", fg: "#06384A" },   // cyan
+    { bg: "#F8B8D0", fg: "#5A0B2B" },   // pink
+    { bg: "#FFC9A3", fg: "#5A2A00" },   // orange
+    { bg: "#D5C4F1", fg: "#2E1A5A" },   // purple
+    { bg: "#B8E0A0", fg: "#1F3D0B" },   // lime
+    { bg: "#F9AFAF", fg: "#5A0B0B" },   // red
+    { bg: "#BFD4F2", fg: "#122A55" },   // blue
+    { bg: "#EFD3A3", fg: "#4A3208" },   // sand
+    { bg: "#C9EDE4", fg: "#0C3B33" },   // teal
+    { bg: "#F3C6E8", fg: "#4E0F42" },   // orchid
+    { bg: "#E2E8A8", fg: "#3B3F0B" },   // olive
+    { bg: "#CFCFEA", fg: "#26264F" },   // periwinkle
+    { bg: "#FBD3B8", fg: "#5A2E10" },   // peach
+    { bg: "#B9E3C6", fg: "#12401F" }    // mint
+  ];
+
+  // Colours are assigned by POSITION in the sorted list of nurses who actually
+  // appear in the data, not by hashing the name.
+  //
+  // Hashing was tried first and is wrong here. With ten colours and six nurses a
+  // collision is more likely than not, and it happened immediately: two nurses
+  // came out the same shade of green. Colour coding whose whole job is telling
+  // people apart cannot hand two people the same colour.
+  //
+  // Position-based assignment guarantees every nurse on screen is distinct, and
+  // stays stable as long as the roster does. Adding a nurse still needs no
+  // configuration: she appears in the data, she gets the next colour.
+  var _colourMap = null;
+
+  function rebuildColourMap() {
+    var seen = {};
+    state.visits.forEach(function (v) {
+      if (v.claimed_by) seen[v.claimed_by.trim().toLowerCase()] = 1;
+    });
+    _colourMap = {};
+    Object.keys(seen).sort().forEach(function (n, i) {
+      _colourMap[n] = NURSE_COLOURS[i % NURSE_COLOURS.length];
+    });
+  }
+
+  function nurseColour(name) {
+    var key = String(name || "").trim().toLowerCase();
+    if (!key) return null;
+    if (!_colourMap) rebuildColourMap();
+    return _colourMap[key] || NURSE_COLOURS[0];
+  }
+
+  function nurseChipHTML(name) {
+    var c = nurseColour(name);
+    if (!c) return "";
+    return '<span class="nchip" style="background:' + c.bg + ';color:' + c.fg + '">' + esc(name) + '</span>';
+  }
+
+  // ---- facilities ----
+  //
+  // Read straight out of the data. Adding a facility means adding visits with a
+  // new location; nothing here changes. Visits with no location are kept under
+  // their own heading rather than dropped.
+  var NO_FACILITY = "￿";
+
+  function facilityLabel(key) { return key === NO_FACILITY ? "No facility listed" : key; }
+
+  function facilitiesIn(visits) {
+    var seen = {};
+    visits.forEach(function (v) { seen[v.location || NO_FACILITY] = 1; });
+    return Object.keys(seen).sort();
+  }
+
+  // The patient a facility belongs to, if it is consistent. Shown in the
+  // calendar header the way the paper version does it. If a facility ever has
+  // more than one patient this returns null and the header just omits it,
+  // rather than picking one arbitrarily.
+  function patientFor(visits, facilityKey) {
+    var names = {};
+    visits.forEach(function (v) {
+      if ((v.location || NO_FACILITY) === facilityKey && v.patient_name) names[v.patient_name] = 1;
+    });
+    var list = Object.keys(names);
+    return list.length === 1 ? list[0] : null;
+  }
+
+  // ---- calendar grid ----
+  //
+  // Builds the weeks of a month as a Sunday-first grid, padded with nulls so the
+  // dates land under the right weekday. Returns [[Date|null x7], ...].
+  function monthGrid(ym) {
+    var p = ym.split("-"), year = +p[0], month = +p[1] - 1;
+    var first = new Date(year, month, 1);
+    var days = new Date(year, month + 1, 0).getDate();
+    var cells = [];
+    for (var b = 0; b < first.getDay(); b++) cells.push(null);
+    for (var d = 1; d <= days; d++) cells.push(new Date(year, month, d));
+    while (cells.length % 7) cells.push(null);
+    var weeks = [];
+    for (var i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+    return weeks;
+  }
+
+  function isoOf(date) {
+    return date.getFullYear() + "-" +
+           String(date.getMonth() + 1).padStart(2, "0") + "-" +
+           String(date.getDate()).padStart(2, "0");
   }
 
   function isMine(v) {
@@ -555,10 +730,9 @@
   }
 
   function render() {
+    rebuildColourMap();
     if (state.selectedDate) renderDay();
-    else if (state.view === "mine") renderMine();
-    else if (state.view === "facility") renderFacility();
-    else renderMonth();
+    else viewById(state.view).draw();
     renderFoot();
     var p = state.month ? monthTitle(state.month) : periodLabel();
     document.title = "Nurse Visit Sign-Up" + (p ? " · " + p : "") + (USE_DEV ? " [DEV]" : "");
@@ -566,16 +740,32 @@
 
   // The three top-level views. Rendered as part of the header so they survive
   // every re-render, including the ones realtime triggers.
+  // The views, in one place. Adding a view means adding an entry here and a
+  // render function; nothing else in the file needs to know about it.
+  //   id     what state.view is set to
+  //   label  the tab caption
+  //   badge  optional count shown as a pill
+  //   draw   the render function
+  var VIEWS = [
+    { id: "month",    label: "Schedule",    draw: function () { renderMonth(); } },
+    { id: "mine",     label: "My visits",   draw: function () { renderMine(); },
+      badge: function () { return myVisits().length; } },
+    { id: "facility", label: "By facility", draw: function () { renderFacility(); } }
+  ];
+
+  function viewById(id) {
+    for (var i = 0; i < VIEWS.length; i++) if (VIEWS[i].id === id) return VIEWS[i];
+    return VIEWS[0];
+  }
+
   function tabsHTML() {
-    var mine = myVisits().length;
-    function tab(id, label) {
-      return '<button class="tab' + (state.view === id ? " on" : "") + '" data-view="' + id + '">' + label + '</button>';
-    }
-    return '<div class="tabs">' +
-      tab("month", "Schedule") +
-      tab("mine", "My visits" + (mine ? ' <span class="pill">' + mine + '</span>' : "")) +
-      tab("facility", "By facility") +
-    '</div>';
+    var out = '<div class="tabs">';
+    VIEWS.forEach(function (v) {
+      var n = v.badge ? v.badge() : 0;
+      out += '<button class="tab' + (state.view === v.id ? " on" : "") + '" data-view="' + v.id + '">' +
+             v.label + (n ? ' <span class="pill">' + n + '</span>' : "") + '</button>';
+    });
+    return out + '</div>';
   }
 
   function wireTabs() {
@@ -603,7 +793,7 @@
           (opts.hideLocation || !v.location ? '' : '<span class="vloc">' + esc(v.location) + '</span>') + '</div>' +
         (v.task ? '<div class="vtask">' + esc(v.task) + '</div>' : '') +
         (claimed
-          ? '<div class="claimed-by"><span class="tag">✓ ' + esc(v.claimed_by) + '</span>' +
+          ? '<div class="claimed-by"><span class="tag">✓ </span>' + nurseChipHTML(v.claimed_by) +
               '<button class="release" data-id="' + v.id + '">' + (mine ? "Cancel my sign-up" : "Remove") + '</button></div>'
           : '<div class="vaction"><button class="btn-signup" data-id="' + v.id + '">Sign up for this visit</button></div>') +
       '</div>' +
@@ -724,6 +914,13 @@
   // Month calendar split by facility. Visits with no location are grouped under
   // their own heading rather than dropped -- 124 of the 341 rows have none, and
   // silently hiding a third of the schedule would be worse than an ugly heading.
+  // Month calendar, one per facility, laid out the way the paper version is:
+  // weekday columns, dates in the corner, every visit for that day listed in the
+  // cell with the nurse's name colour coded.
+  //
+  // Deliberately different from the paper version in one way: unclaimed visits
+  // are shown as "open" rather than omitted. A sign-up sheet whose calendar only
+  // shows filled slots hides the thing you are looking for.
   function renderFacility() {
     var rows = visitsInMonth(state.month);
     el("header").innerHTML =
@@ -739,59 +936,62 @@
       return;
     }
 
-    // Sentinel for "no facility". Written as an ESCAPE, not a literal character:
-    // the first version of this line used a raw control character, which put a NUL
-    // byte in the shipped HTML and made git and grep treat the file as binary.
-    // U+FFFF sorts last, so a real facility always beats "unassigned".
-    var NO_FAC = "￿";
-    var groups = {};
+    // index visits by facility then by date, so each cell is a cheap lookup
+    var byFac = {};
     rows.forEach(function (v) {
-      var k = v.location || NO_FAC;
-      (groups[k] = groups[k] || []).push(v);
+      var f = v.location || NO_FACILITY;
+      (byFac[f] = byFac[f] || {});
+      (byFac[f][v.visit_date] = byFac[f][v.visit_date] || []).push(v);
     });
-    var keys = Object.keys(groups).sort();
 
-    // A compact day grid per facility, not every visit as a full card. Listing
-    // them all is accurate and unreadable -- August is 341 visits, a wall of
-    // cards nobody scans. What this view is for is seeing at a glance which
-    // facility is short of cover on which day. Tapping a day opens the existing
-    // day view for the detail.
-    var html = '<div class="gridwrap fade">';
-    keys.forEach(function (k) {
-      var list = groups[k];
-      var taken = list.filter(function (v) { return v.claimed_by; }).length;
-      var byDay = {};
-      list.forEach(function (v) {
-        var slot = (byDay[v.visit_date] = byDay[v.visit_date] || { total: 0, claimed: 0 });
-        slot.total++; if (v.claimed_by) slot.claimed++;
-      });
-      var days = Object.keys(byDay).sort();
+    var weeks = monthGrid(state.month);
+    var html = '<div class="calwrap fade">';
+
+    facilitiesIn(rows).forEach(function (fac) {
+      var byDate = byFac[fac] || {};
+      var all = Object.keys(byDate).reduce(function (a, d) { return a.concat(byDate[d]); }, []);
+      var taken = all.filter(function (v) { return v.claimed_by; }).length;
+      var patient = patientFor(rows, fac);
+
       html +=
-        '<div class="fachead">' +
-          '<span class="facname">' + esc(k === NO_FAC ? "No facility listed" : k) + '</span>' +
-          '<span class="faccount">' + taken + '/' + list.length + ' covered</span>' +
+        '<div class="calhead">' +
+          '<div class="calmonth">' + esc(monthTitle(state.month)) + '</div>' +
+          '<div class="calfac">' + esc(facilityLabel(fac)) +
+            (patient ? ' <span class="calsep">/</span> <span class="calpat">' + esc(patient) + '</span>' : '') + '</div>' +
+          '<div class="calcount">' + taken + ' of ' + all.length + ' covered</div>' +
         '</div>' +
-        '<div class="grid">';
-      days.forEach(function (iso) {
-        var c = byDay[iso], d = parseDate(iso);
-        var cls = c.claimed === 0 ? "zero" : (c.claimed >= c.total ? "full" : "some");
-        html +=
-          '<button class="day" data-date="' + iso + '">' +
-            '<span class="dow">' + DOW[d.getDay()] + '</span>' +
-            '<span class="num">' + d.getDate() + '</span>' +
-            '<span class="cnt ' + cls + '">' + c.claimed + '/' + c.total + '</span>' +
-          '</button>';
+        '<div class="calgrid">';
+
+      DOW.forEach(function (d) { html += '<div class="caldow">' + d + '</div>'; });
+
+      weeks.forEach(function (week) {
+        week.forEach(function (date) {
+          if (!date) { html += '<div class="calcell empty"></div>'; return; }
+          var iso = isoOf(date);
+          var list = (byDate[iso] || []).slice().sort(function (a, b) { return a.sort_order - b.sort_order; });
+          html += '<div class="calcell' + (list.length ? '' : ' quiet') + '" data-date="' + iso + '">' +
+                    '<div class="caldate">' + date.getDate() + '</div>';
+          list.forEach(function (v) {
+            html += '<div class="calslot' + (v.claimed_by ? '' : ' free') + '">' +
+                      '<span class="caltime">' + esc(v.time_label) + '</span> ' +
+                      (v.claimed_by ? nurseChipHTML(v.claimed_by)
+                                    : '<span class="calopen">open</span>') +
+                    '</div>';
+          });
+          html += '</div>';
+        });
       });
       html += '</div>';
     });
-    html += '<div class="hint">Counts are for that facility on that day · tap a day for the full list</div></div>';
+
+    html += '<div class="hint">Tap any day to sign up or make changes</div></div>';
     el("content").innerHTML = html;
 
-    var fbtns = el("content").querySelectorAll(".day");
-    for (var j = 0; j < fbtns.length; j++) {
-      fbtns[j].onclick = (function (iso) {
+    var cells = el("content").querySelectorAll(".calcell[data-date]");
+    for (var i = 0; i < cells.length; i++) {
+      cells[i].onclick = (function (iso) {
         return function () { state.selectedDate = iso; window.scrollTo(0, 0); render(); };
-      })(fbtns[j].getAttribute("data-date"));
+      })(cells[i].getAttribute("data-date"));
     }
     wireTabs(); wireMonthNav();
   }
