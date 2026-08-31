@@ -123,7 +123,7 @@ That is why step 2 in the build order is auth **and** identity together, not RLS
 | Anonymous WRITE scoped to claim columns | **done**, live on both tables |
 | Latent TRUNCATE/REFERENCES/TRIGGER grants | **done**, revoked on both tables |
 | Passcode gate in the page | **shipped but dormant**, appears only once `003b` runs |
-| Feature 1: ongoing months | **done**, live |
+| Feature 1: ongoing months | **done**, live — code **and** rolling data (see below) |
 | Feature 2: colour coding per nurse | **done**, live |
 | Feature 4: "my visits" | **done**, live |
 | Feature 5: facility month calendar | **done**, live |
@@ -134,6 +134,43 @@ That is why step 2 in the build order is auth **and** identity together, not RLS
 
 **6 of 9 requested features are built. 5 are live** (feature 6, the passcode, is
 shipped but dormant until `003b` runs).
+
+### How ongoing months actually work (added 2026-08-31)
+
+Feature 1 was previously marked "done" on the strength of the **code** alone. The month
+navigation did ship, and it does derive its month list from whatever dates exist in the
+data — but the data never moved past August, so the feature was half done and the status
+line hid it. Nobody noticed until the September sign-ups were nearly due.
+
+The schedule is now stored **once** instead of 341 times:
+
+| Piece | What it does |
+|-------|--------------|
+| `visit_template` (`db/007`) | The standing day as **11 rows** — one per slot. Seeded from the real August data with `DISTINCT ON (sort_order)`, never typed by hand. `weekday` is NULL (every day is identical today); `active_from` is 2026-09-01 |
+| Unique index on `(visit_date, sort_order)` (`db/008`) | Makes generation idempotent **structurally**, so a re-run cannot double-insert |
+| `generate_visits(from, to, target)` (`db/009`) | Projects the template across any date range. **Additive only** — no UPDATE, no DELETE, `ON CONFLICT DO NOTHING`. Returns the number of rows actually inserted |
+
+**To add more months, run one line** in the Supabase SQL editor:
+
+```sql
+select public.generate_visits(date '2026-12-01', date '2027-02-28', 'visits');
+```
+
+Safe to run twice — the second run returns `0`. Keep roughly **3 months ahead**; run it
+quarterly.
+
+**To change the schedule** — a new patient, a time change, a discharge — edit the 11
+`visit_template` rows, not the visit rows. Future months then generate correctly.
+`active_from` / `active_to` bound when a template row is in force, so history is never
+rewritten. If one day ever differs from the others, set `weekday` (0=Sunday..6=Saturday)
+on that row instead of adding a schema change.
+
+**Applied 2026-08-31.** `007`, `008` and `009` were run against both tables. Live
+`visits` went from 341 rows to **1342**: September 330, October 341, November 330, all
+open. Proven on `visits_dev` first, where the same call inserted 946 — exactly 1001 minus
+the 55 September rows already seeded there, which the conflict guard skipped. The August
+sign-ups were fingerprinted before and after and are **byte-identical**: none of the nine
+nurses' existing shifts changed.
 
 ### Correction: features 2 and 5 were one feature, not two
 
