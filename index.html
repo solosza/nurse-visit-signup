@@ -544,8 +544,18 @@
               v.claimed_by.trim().toLowerCase() === state.nurse.trim().toLowerCase());
   }
 
-  function myVisits() {
-    return state.visits.filter(isMine).sort(function (a, b) {
+  // Scoped to a month when ym is given ('YYYY-MM'), otherwise every month.
+  //
+  // The scope is not cosmetic. Until 2026-08-31 the table held August only, so
+  // "all my visits" and "my visits this month" were the same number and the
+  // unscoped count was right by accident. The moment September, October and
+  // November were generated, the badge started reading 40 while the page showed
+  // September, where the same nurse had none. A count next to a month selector
+  // has to mean that month.
+  function myVisits(ym) {
+    return state.visits.filter(function (v) {
+      return isMine(v) && (!ym || monthKey(v.visit_date) === ym);
+    }).sort(function (a, b) {
       return a.visit_date < b.visit_date ? -1 : a.visit_date > b.visit_date ? 1 : a.sort_order - b.sort_order;
     });
   }
@@ -749,7 +759,7 @@
   var VIEWS = [
     { id: "month",    label: "Schedule",    draw: function () { renderMonth(); } },
     { id: "mine",     label: "My visits",   draw: function () { renderMine(); },
-      badge: function () { return myVisits().length; } },
+      badge: function () { return myVisits(state.month).length; } },
     { id: "facility", label: "By facility", draw: function () { renderFacility(); } }
   ];
 
@@ -876,12 +886,14 @@
   // across all months, not just the one being viewed. Grouped by date because
   // that is how a shift is actually read.
   function renderMine() {
-    var rows = myVisits();
+    var rows = myVisits(state.month);
+    var period = state.month ? monthTitle(state.month) : "";
     el("header").innerHTML =
       '<div class="hdr">' +
         '<div class="eyebrow">Nurse Visit Sign-Up</div>' +
         '<div class="title">' + (state.nurse ? esc(state.nurse) + "'s visits" : "My visits") + '</div>' +
-        (rows.length ? '<div class="covered">' + rows.length + ' visit' + (rows.length === 1 ? '' : 's') + ' signed up</div>' : '') +
+        (rows.length ? '<div class="covered">' + rows.length + ' visit' + (rows.length === 1 ? '' : 's') +
+                       ' signed up' + (period ? ' in ' + esc(period) : '') + '</div>' : '') +
         tabsHTML() +
       '</div>';
 
@@ -894,7 +906,8 @@
       return;
     }
     if (!rows.length) {
-      el("content").innerHTML = '<div class="empty fade">You have not signed up for any visits yet.</div>';
+      el("content").innerHTML = '<div class="empty fade">You have not signed up for any visits' +
+        (period ? ' in ' + esc(period) : '') + '. Use the arrows above to check another month.</div>';
       wireTabs();
       return;
     }
