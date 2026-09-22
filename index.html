@@ -264,6 +264,32 @@
     .caldate { font-size: 10px; }
     .calmonth { font-size: 19px; }
   }
+
+  /* --- Editing (feature 3): controls show only for a signed-in coordinator --- */
+  .vedit { display: flex; gap: 16px; margin-top: 9px; }
+  .vedit button { background: none; border: none; font-size: 12px; font-weight: 700; cursor: pointer; padding: 0; text-decoration: underline; }
+  .vedit .e { color: var(--gold); }
+  .vedit .d { color: var(--pink); }
+  .addvisit { display: block; width: 100%; margin: 12px 0 4px; background: #fff; border: 1.5px dashed var(--muted2);
+    color: var(--pink); font-size: 13px; font-weight: 700; padding: 12px; border-radius: 12px; cursor: pointer; }
+  .addvisit:hover { border-color: var(--pink); }
+  .modal-bg { position: fixed; inset: 0; background: rgba(20,16,26,0.45); display: flex; align-items: center;
+    justify-content: center; padding: 16px; z-index: 50; animation: fadeIn 0.15s ease-out; }
+  .modal { background: #fff; border-radius: 16px; padding: 20px; width: 100%; max-width: 420px;
+    box-shadow: rgba(0,0,0,0.25) 0 10px 40px; max-height: 90vh; overflow: auto; }
+  .modal h3 { margin: 0 0 12px; font-family: Georgia, serif; font-size: 19px; }
+  .modal label { display: block; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted); font-weight: 700; margin: 12px 0 4px; }
+  .modal input, .modal textarea { width: 100%; font-size: 16px; font-family: inherit; color: var(--ink);
+    border: 1.5px solid var(--card-border); border-radius: 9px; padding: 9px 10px; background: #fff; }
+  .modal textarea { resize: vertical; min-height: 56px; }
+  .modal .row2 { display: flex; gap: 10px; }
+  .modal .row2 > div { flex: 1; min-width: 0; }
+  .modal .acts { display: flex; gap: 10px; margin-top: 18px; }
+  .modal .acts button { flex: 1; font-size: 14px; font-weight: 700; padding: 11px; border-radius: 10px; cursor: pointer; border: none; }
+  .modal .save { background: var(--pink); color: #fff; }
+  .modal .cancel { background: #F0ECEA; color: var(--ink); }
+  .modal .err { color: var(--pink); font-size: 12.5px; font-weight: 600; margin-top: 10px; min-height: 16px; }
 </style>
 </head>
 <body>
@@ -277,6 +303,7 @@
   <div class="foot" id="foot"></div>
 </div>
 <div id="toast" class="toast"></div>
+<div id="modal" style="display:none"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
@@ -313,7 +340,8 @@
     live: false,
     locked: false,         // true while the passcode gate is showing
     view: "month",         // "month" | "mine" | "facility"
-    month: null            // 'YYYY-MM' currently shown; null until data loads
+    month: null,           // 'YYYY-MM' currently shown; null until data loads
+    editMode: false        // coordinator editing (feature 3); needs a signed-in session
   };
 
   var MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -672,6 +700,17 @@
   function subscribeLive() {
     sb.channel("visits-live-" + TABLE)
       .on("postgres_changes", { event: "*", schema: "public", table: TABLE }, function (payload) {
+        // DELETE (D2 fix): payload.new is empty on a delete, so drop the row by
+        // payload.old.id instead of leaving it on screen until a refresh.
+        if (payload.eventType === "DELETE") {
+          var oldid = payload.old && payload.old.id;
+          if (oldid && state.byId[oldid]) {
+            delete state.byId[oldid];
+            state.visits = state.visits.filter(function (x) { return x.id !== oldid; });
+            render();
+          }
+          return;
+        }
         var row = payload.new;
         if (!row || !row.id) return;
         if (state.byId[row.id]) {
@@ -717,6 +756,135 @@
     render(); toast("Sign-up removed.");
   }
 
+  // ---- editing (feature 3): coordinator only, passcode-gated ----
+  //
+  // A write here uses the signed-in (authenticated) session token, which db/010
+  // grants edit/insert/delete on the detail columns. anon has no such grant, so
+  // the publishable key in the page source still cannot edit anything.
+
+  function closeModal() { var m = el("modal"); m.innerHTML = ""; m.style.display = "none"; }
+  function openModal(inner) {
+    var m = el("modal");
+    m.style.display = "flex";
+    m.innerHTML = '<div class="modal-bg"><div class="modal">' + inner + '</div></div>';
+    m.querySelector(".modal-bg").onclick = function (e) { if (e.target === this) closeModal(); };
+  }
+
+  function toggleEdit() {
+    if (!state.signedIn) { openEditorSignIn(); return; }
+    state.editMode = !state.editMode;
+    renderWhoami(); render();
+    toast(state.editMode ? "Editing on." : "Editing off.");
+  }
+
+  // Sign in as the shared passcode account, then turn editing on. Lets a
+  // coordinator edit even while reads are still anonymous (003b not run) and the
+  // full-screen passcode gate never appeared.
+  function openEditorSignIn() {
+    openModal(
+      '<h3>Edit the schedule</h3>' +
+      '<p style="font-size:13px;color:#55505A;margin:0 0 4px;">Enter the coordinator passcode to edit visits, times, and add or remove visits.</p>' +
+      '<label>Passcode</label>' +
+      '<input id="ecode" type="password" autocomplete="current-password" placeholder="passcode" />' +
+      '<div class="err" id="eerr"></div>' +
+      '<div class="acts"><button class="cancel" id="ecancel">Cancel</button><button class="save" id="ego">Sign in</button></div>');
+    var go = el("ego"), input = el("ecode");
+    el("ecancel").onclick = closeModal;
+    var submit = async function () {
+      var code = (input.value || "").trim();
+      if (!code) return;
+      go.disabled = true; go.textContent = "Checking…";
+      var res = await sb.auth.signInWithPassword({ email: SHARED_ACCOUNT, password: code });
+      if (res.error) { el("eerr").textContent = "That passcode was not recognised."; go.disabled = false; go.textContent = "Sign in"; return; }
+      state.signedIn = true; state.editMode = true;
+      closeModal(); renderWhoami(); render(); toast("Editing on.");
+    };
+    go.onclick = submit;
+    input.onkeydown = function (e) { if (e.key === "Enter") submit(); };
+    input.focus();
+  }
+
+  // Add/edit form. v = the row to edit, or null to add a new visit.
+  function openVisitForm(v) {
+    if (!v && !state.selectedDate && !datesList().length) { toast("Open a day first."); return; }
+    var adding = !v;
+    var day = adding ? (state.selectedDate || datesList()[0]) : v.visit_date;
+    function fv(x) { return esc(x == null ? "" : x); }
+    openModal(
+      '<h3>' + (adding ? "Add a visit" : "Edit visit") + '</h3>' +
+      '<div class="row2">' +
+        '<div><label>Date</label><input id="f_date" type="date" value="' + fv(day) + '" /></div>' +
+        '<div><label>Time</label><input id="f_time" type="text" placeholder="7:00 AM" value="' + (adding ? "" : fv(v.time_label)) + '" /></div>' +
+      '</div>' +
+      '<div class="row2">' +
+        '<div><label>Section</label><input id="f_section" type="text" placeholder="Morning" value="' + (adding ? "" : fv(v.section)) + '" /></div>' +
+        '<div><label>Order</label><input id="f_order" type="number" inputmode="numeric" placeholder="1" value="' + (adding ? "" : fv(v.sort_order)) + '" /></div>' +
+      '</div>' +
+      '<label>Patient</label><input id="f_patient" type="text" value="' + (adding ? "" : fv(v.patient_name)) + '" />' +
+      '<label>Facility</label><input id="f_loc" type="text" value="' + (adding ? "" : fv(v.location)) + '" />' +
+      '<label>Task</label><textarea id="f_task">' + (adding ? "" : fv(v.task)) + '</textarea>' +
+      '<div class="err" id="ferr"></div>' +
+      '<div class="acts"><button class="cancel" id="fcancel">Cancel</button><button class="save" id="fsave">' + (adding ? "Add visit" : "Save changes") + '</button></div>');
+    el("fcancel").onclick = closeModal;
+    el("fsave").onclick = function () { saveVisit(adding ? null : v.id); };
+    el("f_time").focus();
+  }
+
+  async function saveVisit(id) {
+    var save = el("fsave"), errbox = el("ferr");
+    var rec = {
+      visit_date: (el("f_date").value || "").trim(),
+      time_label: (el("f_time").value || "").trim(),
+      section: (el("f_section").value || "").trim(),
+      sort_order: parseInt(el("f_order").value, 10),
+      patient_name: (el("f_patient").value || "").trim() || null,
+      location: (el("f_loc").value || "").trim() || null,
+      task: (el("f_task").value || "").trim() || null
+    };
+    if (!rec.visit_date || !rec.time_label || !rec.section || isNaN(rec.sort_order)) {
+      errbox.textContent = "Date, time, section and order are required."; return;
+    }
+    save.disabled = true; save.textContent = "Saving…";
+    var res = id
+      ? await sb.from(TABLE).update(rec).eq("id", id).select()
+      : await sb.from(TABLE).insert(rec).select();
+    if (res.error) {
+      save.disabled = false; save.textContent = id ? "Save changes" : "Add visit";
+      errbox.textContent = (res.error.code === "23505")
+        ? "That day already has a visit at that order number — pick a different order."
+        : (isAuthError(res.error) ? "Your editing session expired — sign in again." : "Could not save — try again.");
+      return;
+    }
+    var row = res.data && res.data[0];
+    if (row) {
+      if (state.byId[row.id]) { var c = state.byId[row.id]; for (var k in row) c[k] = row[k]; }
+      else { state.visits.push(row); state.byId[row.id] = row; }
+    }
+    closeModal(); render(); toast(id ? "Visit updated." : "Visit added.");
+  }
+
+  function confirmDelete(id) {
+    var v = state.byId[id]; if (!v) return;
+    openModal(
+      '<h3>Delete this visit?</h3>' +
+      '<p style="font-size:13.5px;color:#55505A;margin:0 0 4px;">' +
+        esc(longDate(v.visit_date)) + ' · ' + esc(v.time_label) +
+        (v.patient_name ? ' · ' + esc(v.patient_name) : '') + '</p>' +
+      (v.claimed_by ? '<p style="font-size:12.5px;color:var(--pink);font-weight:600;margin:0;">' +
+        esc(v.claimed_by) + ' is signed up for this visit.</p>' : '') +
+      '<div class="err" id="derr"></div>' +
+      '<div class="acts"><button class="cancel" id="dcancel">Keep it</button><button class="save" id="dyes">Delete</button></div>');
+    el("dcancel").onclick = closeModal;
+    el("dyes").onclick = async function () {
+      var b = el("dyes"); b.disabled = true; b.textContent = "Deleting…";
+      var res = await sb.from(TABLE).delete().eq("id", id);
+      if (res.error) { el("derr").textContent = isAuthError(res.error) ? "Session expired — sign in again." : "Could not delete — try again."; b.disabled = false; b.textContent = "Delete"; return; }
+      delete state.byId[id];
+      state.visits = state.visits.filter(function (x) { return x.id !== id; });
+      closeModal(); render(); toast("Visit deleted.");
+    };
+  }
+
   // ---- rendering ----
   function renderWhoami() {
     var w = el("whoami");
@@ -729,8 +897,13 @@
     // Only offer sign-out once a session actually exists, so the control does not
     // appear on a page that never required one.
     if (state.signedIn) w.innerHTML += ' <button id="sout">sign out</button>';
+    // Editing (feature 3): signed-in coordinators toggle edit mode; everyone else
+    // gets a passcode prompt first. Anon can never edit — writes are RLS-gated.
+    w.innerHTML += ' <button id="editt">' +
+      (state.signedIn ? (state.editMode ? "editing: on" : "editing: off") : "edit schedule") + '</button>';
     var b = document.getElementById("chg"); if (b) b.onclick = changeNurse;
     var s = document.getElementById("sout"); if (s) s.onclick = signOut;
+    var et = document.getElementById("editt"); if (et) et.onclick = toggleEdit;
   }
 
   function renderFoot() {
@@ -806,6 +979,10 @@
           ? '<div class="claimed-by"><span class="tag">✓ </span>' + nurseChipHTML(v.claimed_by) +
               '<button class="release" data-id="' + v.id + '">' + (mine ? "Cancel my sign-up" : "Remove") + '</button></div>'
           : '<div class="vaction"><button class="btn-signup" data-id="' + v.id + '">Sign up for this visit</button></div>') +
+        (state.signedIn && state.editMode
+          ? '<div class="vedit"><button class="e" data-edit="' + v.id + '">✎ Edit</button>' +
+              '<button class="d" data-del="' + v.id + '">🗑 Delete</button></div>'
+          : '') +
       '</div>' +
     '</div>';
   }
@@ -820,6 +997,14 @@
       rels[r].onclick = (function (id) {
         return function () { if (window.confirm("Remove this sign-up?")) release(id); };
       })(rels[r].getAttribute("data-id"));
+    }
+    var eds = el("content").querySelectorAll("[data-edit]");
+    for (var e2 = 0; e2 < eds.length; e2++) {
+      eds[e2].onclick = (function (id) { return function () { openVisitForm(state.byId[id]); }; })(eds[e2].getAttribute("data-edit"));
+    }
+    var dels = el("content").querySelectorAll("[data-del]");
+    for (var d2 = 0; d2 < dels.length; d2++) {
+      dels[d2].onclick = (function (id) { return function () { confirmDelete(id); }; })(dels[d2].getAttribute("data-del"));
     }
   }
 
@@ -1029,12 +1214,17 @@
       if (v.section !== lastSection) { html += '<div class="section-label">' + esc(v.section) + '</div>'; lastSection = v.section; }
       html += visitCardHTML(v);
     }
+    if (state.signedIn && state.editMode) {
+      html += '<button class="addvisit" id="addvisit">+ Add a visit to this day</button>';
+    }
     html += '</div>';
     el("content").innerHTML = html;
 
     var back = document.getElementById("backbtn");
     if (back) back.onclick = function () { state.selectedDate = null; window.scrollTo(0,0); render(); };
     wireVisitButtons();
+    var av = document.getElementById("addvisit");
+    if (av) av.onclick = function () { openVisitForm(null); };
   }
 
   function splitTime(label) {
