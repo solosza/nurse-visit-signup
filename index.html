@@ -329,6 +329,10 @@
   var USE_DEV = /[?&]dev=1/.test(location.search) ||
                 (!/[?&]prod=1/.test(location.search) && !IS_LIVE_SITE);
   var TABLE = USE_DEV ? "visits_dev" : "visits";
+  // Master daily schedule (feature 4). The template functions take TABLE as their
+  // target and derive the matching template table themselves; the app reads the
+  // template list directly, so it needs the name too.
+  var TEMPLATE_TABLE = USE_DEV ? "visit_template_dev" : "visit_template";
 
   var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -885,6 +889,132 @@
     };
   }
 
+  // ---- master daily schedule (feature 4) ----
+  //
+  // The client edits ONE list of visits that happen every day. A change flows to
+  // every OPEN day; days a nurse already signed up for are left alone and reported.
+  // The safety-critical work is in the DB functions (db/011); this is just the UI.
+  // The RPCs take TABLE as target and derive the matching template table.
+
+  async function openDailySchedule() {
+    openModal('<h3>Daily schedule</h3><div class="loading" id="dsbody">Loading…</div>');
+    var res = await sb.from(TEMPLATE_TABLE).select("*").order("sort_order", { ascending: true });
+    var body = el("dsbody"); if (!body) return;
+    if (res.error) {
+      body.className = "err";
+      body.textContent = isAuthError(res.error) ? "Your editing session expired — sign in again." : "Could not load the daily schedule.";
+      return;
+    }
+    state.template = res.data || [];
+    var rows = state.template.map(function (t) {
+      return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid #eee;">' +
+        '<div style="min-width:0;"><b>' + esc(t.time_label) + '</b> · ' + esc(t.patient_name || "—") +
+        '<div style="font-size:11.5px;color:#8a8590;">' + esc(t.section) + ' · #' + esc(t.sort_order) +
+        (t.location ? ' · ' + esc(t.location) : '') + '</div></div>' +
+        '<div class="vedit"><button class="e" data-tedit="' + esc(t.id) + '">✎</button>' +
+        '<button class="d" data-tdel="' + esc(t.id) + '">🗑</button></div></div>';
+    }).join("") || '<p style="font-size:13px;color:#55505A;">No daily visits yet — add the first one below.</p>';
+    body.className = "";
+    body.innerHTML =
+      '<p style="font-size:12.5px;color:#55505A;margin:0 0 8px;">These visits happen <b>every day</b>. A change here updates every open day; days a nurse already signed up for are left as-is.</p>' +
+      rows +
+      '<div class="acts"><button class="cancel" id="dsclose">Close</button><button class="save" id="dsadd">+ Add a daily visit</button></div>';
+    el("dsclose").onclick = closeModal;
+    el("dsadd").onclick = function () { openTemplateForm(null); };
+    function byId(id) { return state.template.filter(function (x) { return x.id === id; })[0]; }
+    Array.prototype.forEach.call(body.querySelectorAll("[data-tedit]"), function (btn) {
+      btn.onclick = function () { openTemplateForm(byId(btn.getAttribute("data-tedit"))); };
+    });
+    Array.prototype.forEach.call(body.querySelectorAll("[data-tdel]"), function (btn) {
+      btn.onclick = function () { confirmDeleteTemplate(byId(btn.getAttribute("data-tdel"))); };
+    });
+  }
+
+  // Add/edit a daily visit. t = template row to edit, or null to add. No date
+  // field: a template row is "every day".
+  function openTemplateForm(t) {
+    var adding = !t;
+    function fv(x) { return esc(x == null ? "" : x); }
+    var nextOrder = adding
+      ? (state.template.reduce(function (m, x) { return Math.max(m, x.sort_order || 0); }, 0) + 1)
+      : t.sort_order;
+    openModal(
+      '<h3>' + (adding ? "Add a daily visit" : "Edit daily visit") + '</h3>' +
+      '<p style="font-size:12.5px;color:#55505A;margin:0 0 4px;">Applies to every day.</p>' +
+      '<div class="row2">' +
+        '<div><label>Time</label><input id="t_time" type="text" placeholder="7:00 AM" value="' + (adding ? "" : fv(t.time_label)) + '" /></div>' +
+        '<div><label>Order</label><input id="t_order" type="number" inputmode="numeric" value="' + fv(nextOrder) + '" /></div>' +
+      '</div>' +
+      '<label>Section</label><input id="t_section" type="text" placeholder="Morning" value="' + (adding ? "" : fv(t.section)) + '" />' +
+      '<label>Patient</label><input id="t_patient" type="text" value="' + (adding ? "" : fv(t.patient_name)) + '" />' +
+      '<label>Facility</label><input id="t_loc" type="text" value="' + (adding ? "" : fv(t.location)) + '" />' +
+      '<label>Task</label><textarea id="t_task">' + (adding ? "" : fv(t.task)) + '</textarea>' +
+      '<div class="err" id="terr"></div>' +
+      '<div class="acts"><button class="cancel" id="tcancel">Cancel</button><button class="save" id="tsave">' + (adding ? "Add to every day" : "Save changes") + '</button></div>');
+    el("tcancel").onclick = function () { openDailySchedule(); };
+    el("tsave").onclick = function () { saveTemplateSlot(adding ? null : t.id); };
+    el("t_time").focus();
+  }
+
+  async function saveTemplateSlot(id) {
+    var save = el("tsave"), errbox = el("terr");
+    var rec = {
+      p_section: (el("t_section").value || "").trim(),
+      p_order: parseInt(el("t_order").value, 10),
+      p_time: (el("t_time").value || "").trim(),
+      p_patient: (el("t_patient").value || "").trim() || null,
+      p_location: (el("t_loc").value || "").trim() || null,
+      p_task: (el("t_task").value || "").trim() || null
+    };
+    if (!rec.p_section || !rec.p_time || isNaN(rec.p_order)) {
+      errbox.textContent = "Time, section and order are required."; return;
+    }
+    save.disabled = true; save.textContent = "Saving…";
+    var args = { target_table: TABLE, p_section: rec.p_section, p_order: rec.p_order,
+                 p_time: rec.p_time, p_patient: rec.p_patient, p_location: rec.p_location, p_task: rec.p_task };
+    var res = id
+      ? await sb.rpc("edit_template_slot", Object.assign({ p_id: id }, args))
+      : await sb.rpc("add_template_slot", args);
+    if (res.error) {
+      save.disabled = false; save.textContent = id ? "Save changes" : "Add to every day";
+      errbox.textContent = isAuthError(res.error) ? "Your editing session expired — sign in again." : "Could not save — try again.";
+      return;
+    }
+    var d = res.data || {};
+    var msg;
+    if (id) {
+      msg = "Updated " + (d.days_updated || 0) + " day" + (d.days_updated === 1 ? "" : "s");
+      if (d.claimed_skipped) msg += " · " + d.claimed_skipped + " already-claimed left unchanged";
+    } else {
+      msg = "Added to " + (d.days_added || 0) + " day" + (d.days_added === 1 ? "" : "s");
+    }
+    await loadAll();
+    toast(msg);
+    openDailySchedule();
+  }
+
+  function confirmDeleteTemplate(t) {
+    if (!t) return;
+    openModal(
+      '<h3>Remove this daily visit?</h3>' +
+      '<p style="font-size:13.5px;color:#55505A;margin:0 0 4px;">' + esc(t.time_label) + ' · ' + esc(t.patient_name || "—") + '</p>' +
+      '<p style="font-size:12.5px;color:#55505A;margin:0 0 4px;">Removed from every open day going forward. Days a nurse already signed up for are kept.</p>' +
+      '<div class="err" id="tderr"></div>' +
+      '<div class="acts"><button class="cancel" id="tdcancel">Keep it</button><button class="save" id="tdyes">Remove</button></div>');
+    el("tdcancel").onclick = function () { openDailySchedule(); };
+    el("tdyes").onclick = async function () {
+      var b = el("tdyes"); b.disabled = true; b.textContent = "Removing…";
+      var res = await sb.rpc("delete_template_slot", { target_table: TABLE, p_id: t.id });
+      if (res.error) { el("tderr").textContent = isAuthError(res.error) ? "Session expired — sign in again." : "Could not remove — try again."; b.disabled = false; b.textContent = "Remove"; return; }
+      var d = res.data || {};
+      var msg = "Removed from " + (d.days_removed || 0) + " day" + (d.days_removed === 1 ? "" : "s");
+      if (d.claimed_kept) msg += " · " + d.claimed_kept + " already-claimed kept";
+      await loadAll();
+      toast(msg);
+      openDailySchedule();
+    };
+  }
+
   // ---- rendering ----
   function renderWhoami() {
     var w = el("whoami");
@@ -901,9 +1031,14 @@
     // gets a passcode prompt first. Anon can never edit — writes are RLS-gated.
     w.innerHTML += ' <button id="editt">' +
       (state.signedIn ? (state.editMode ? "editing: on" : "editing: off") : "edit schedule") + '</button>';
+    // Master daily schedule (feature 4): only while actively editing.
+    if (state.signedIn && state.editMode) {
+      w.innerHTML += ' <button id="dailysched">daily schedule</button>';
+    }
     var b = document.getElementById("chg"); if (b) b.onclick = changeNurse;
     var s = document.getElementById("sout"); if (s) s.onclick = signOut;
     var et = document.getElementById("editt"); if (et) et.onclick = toggleEdit;
+    var ds = document.getElementById("dailysched"); if (ds) ds.onclick = openDailySchedule;
   }
 
   function renderFoot() {
