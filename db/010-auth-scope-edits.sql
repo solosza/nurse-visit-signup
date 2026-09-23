@@ -46,18 +46,21 @@ create policy "auth delete visits_dev" on public.visits_dev
   for delete to authenticated using (true);
 
 -- ===========================================================================
--- 010b -- the live table. Uncomment and run once 010a is verified on dev.
+-- 010b -- the live table. APPLIED 2026-09-22 (live cutover). Editing is now on
+-- for the real schedule; anon stays claim/release only (verified: anon UPDATE is
+-- limited to claimed_by/claimed_at, authenticated can UPDATE all detail columns
+-- plus INSERT/DELETE).
 -- ===========================================================================
--- grant update (visit_date, section, sort_order, time_label, patient_name, location, task)
---   on public.visits to authenticated;
--- grant insert, delete on public.visits to authenticated;
---
--- drop policy if exists "auth insert visits" on public.visits;
--- drop policy if exists "auth delete visits" on public.visits;
--- create policy "auth insert visits" on public.visits
---   for insert to authenticated with check (true);
--- create policy "auth delete visits" on public.visits
---   for delete to authenticated using (true);
+grant update (visit_date, section, sort_order, time_label, patient_name, location, task)
+  on public.visits to authenticated;
+grant insert, delete on public.visits to authenticated;
+
+drop policy if exists "auth insert visits" on public.visits;
+drop policy if exists "auth delete visits" on public.visits;
+create policy "auth insert visits" on public.visits
+  for insert to authenticated with check (true);
+create policy "auth delete visits" on public.visits
+  for delete to authenticated using (true);
 
 -- ===========================================================================
 -- Verification -- run and read it.
