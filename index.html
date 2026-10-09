@@ -362,6 +362,42 @@
     var p = iso.split("-"); return new Date(+p[0], +p[1]-1, +p[2]);
   }
 
+  // time_label is free text ("6:00 AM", "3:15pm", "11am", "15:30", "noon").
+  // Returns minutes after midnight, or null if it cannot be read as a time.
+  function parseTime(label) {
+    var s = String(label == null ? "" : label).trim().toLowerCase().replace(/\./g, "");
+    if (s === "noon") return 12 * 60;
+    if (s === "midnight") return 0;
+    var m = /^(\d{1,2})(?::?(\d{2}))?\s*(am|pm|a|p)?$/.exec(s);
+    if (!m) return null;
+    var h = +m[1], min = m[2] ? +m[2] : 0, ap = m[3] ? m[3].charAt(0) : null;
+    if (min > 59) return null;
+    if (ap) {
+      if (h < 1 || h > 12) return null;
+      h = (h % 12) + (ap === "p" ? 12 : 0);
+    } else if (h > 23 || !m[2]) {
+      return null;  // a bare "3" is ambiguous; "15:30" is fine
+    }
+    return h * 60 + min;
+  }
+  // Canonical label for a time typed into a form: "3:15pm" -> "3:15 PM".
+  function formatTime(mins) {
+    var h = Math.floor(mins / 60), m = mins % 60;
+    return ((h % 12) || 12) + ":" + String(m).padStart(2, "0") + " " + (h < 12 ? "AM" : "PM");
+  }
+  // Visits on a day are shown in clock order. sort_order is only the tie-break:
+  // it is the slot key the daily schedule uses to find its rows (db/011), so it
+  // is never renumbered to follow the clock. Unreadable times go last.
+  function byTime(a, b) {
+    var ta = parseTime(a.time_label), tb = parseTime(b.time_label);
+    if (ta !== tb) {
+      if (ta === null) return 1;
+      if (tb === null) return -1;
+      return ta - tb;
+    }
+    return (a.sort_order || 0) - (b.sort_order || 0);
+  }
+
   var toastTimer;
   function toast(msg) {
     var t = el("toast"); t.textContent = msg; t.classList.add("show");
@@ -588,7 +624,7 @@
     return state.visits.filter(function (v) {
       return isMine(v) && (!ym || monthKey(v.visit_date) === ym);
     }).sort(function (a, b) {
-      return a.visit_date < b.visit_date ? -1 : a.visit_date > b.visit_date ? 1 : a.sort_order - b.sort_order;
+      return a.visit_date < b.visit_date ? -1 : a.visit_date > b.visit_date ? 1 : byTime(a, b);
     });
   }
 
@@ -617,8 +653,28 @@
            /permission denied|jwt|not authorized/i.test(err.message || "");
   }
 
+  // The API returns at most 1000 rows per request (Supabase's default max-rows),
+  // and says nothing when it cuts a list short. At 1464 rows the schedule stopped
+  // at Oct 28: the end of October and all of November silently vanished. So read
+  // in pages, each starting where the rows received so far end, until a page
+  // comes back empty. Offsetting by rows received (not by a page size) stays
+  // correct even if the server cap is lowered. The `id` order term makes the
+  // order total, so no row lands on two pages or none.
+  async function fetchAllVisits() {
+    var rows = [];
+    for (;;) {
+      var res = await sb.from(TABLE).select("*")
+        .order("visit_date", { ascending: true }).order("sort_order", { ascending: true })
+        .order("id", { ascending: true })
+        .range(rows.length, rows.length + 999);
+      if (res.error) return res;
+      if (!res.data || !res.data.length) return { data: rows, error: null };
+      rows = rows.concat(res.data);
+    }
+  }
+
   async function loadAll() {
-    var res = await sb.from(TABLE).select("*").order("visit_date", { ascending: true }).order("sort_order", { ascending: true });
+    var res = await fetchAllVisits();
     if (res.error) {
       // Not signed in -> ask for the passcode rather than showing an error.
       // This is what makes the rollout need no coordinated deploy: while the
@@ -820,10 +876,7 @@
         '<div><label>Date</label><input id="f_date" type="date" value="' + fv(day) + '" /></div>' +
         '<div><label>Time</label><input id="f_time" type="text" placeholder="7:00 AM" value="' + (adding ? "" : fv(v.time_label)) + '" /></div>' +
       '</div>' +
-      '<div class="row2">' +
-        '<div><label>Section</label><input id="f_section" type="text" placeholder="Morning" value="' + (adding ? "" : fv(v.section)) + '" /></div>' +
-        '<div><label>Order</label><input id="f_order" type="number" inputmode="numeric" placeholder="1" value="' + (adding ? "" : fv(v.sort_order)) + '" /></div>' +
-      '</div>' +
+      '<label>Section</label><input id="f_section" type="text" placeholder="Morning" value="' + (adding ? "" : fv(v.section)) + '" />' +
       '<label>Patient</label><input id="f_patient" type="text" value="' + (adding ? "" : fv(v.patient_name)) + '" />' +
       '<label>Facility</label><input id="f_loc" type="text" value="' + (adding ? "" : fv(v.location)) + '" />' +
       '<label>Task</label><textarea id="f_task">' + (adding ? "" : fv(v.task)) + '</textarea>' +
@@ -834,29 +887,54 @@
     el("f_time").focus();
   }
 
+  var MANUAL_ORDER_BASE = 100;
+  function nextFreeOrder(dateIso) {
+    var max = MANUAL_ORDER_BASE;
+    for (var i = 0; i < state.visits.length; i++) {
+      var v = state.visits[i];
+      if (v.visit_date === dateIso && v.sort_order > max) max = v.sort_order;
+    }
+    return max + 1;
+  }
+
   async function saveVisit(id) {
     var save = el("fsave"), errbox = el("ferr");
     var rec = {
       visit_date: (el("f_date").value || "").trim(),
       time_label: (el("f_time").value || "").trim(),
       section: (el("f_section").value || "").trim(),
-      sort_order: parseInt(el("f_order").value, 10),
       patient_name: (el("f_patient").value || "").trim() || null,
       location: (el("f_loc").value || "").trim() || null,
       task: (el("f_task").value || "").trim() || null
     };
-    if (!rec.visit_date || !rec.time_label || !rec.section || isNaN(rec.sort_order)) {
-      errbox.textContent = "Date, time, section and order are required."; return;
+    if (!rec.visit_date || !rec.time_label || !rec.section) {
+      errbox.textContent = "Date, time and section are required."; return;
     }
+    // The day lists visits in clock order, so the time has to be readable as one.
+    var mins = parseTime(rec.time_label);
+    if (mins === null) { errbox.textContent = "Enter the time like 3:15 PM."; return; }
+    rec.time_label = formatTime(mins);
+
+    // No order to type any more: the list sorts by time. sort_order still has to
+    // be unique per day (db/008), and it is also the slot key the daily schedule
+    // matches on (db/011), so an edit that stays on the same day keeps its number.
+    // A visit added by hand, or moved to another day, takes the next number from
+    // 101 up -- daily-schedule slots count up from 1, so the two never collide.
+    var old = id ? state.byId[id] : null;
+    var needOrder = !old || old.visit_date !== rec.visit_date;
     save.disabled = true; save.textContent = "Saving…";
-    var res = id
-      ? await sb.from(TABLE).update(rec).eq("id", id).select()
-      : await sb.from(TABLE).insert(rec).select();
+    var res;
+    for (var attempt = 0; attempt < 5; attempt++) {
+      if (needOrder) rec.sort_order = nextFreeOrder(rec.visit_date) + attempt;
+      res = id
+        ? await sb.from(TABLE).update(rec).eq("id", id).select()
+        : await sb.from(TABLE).insert(rec).select();
+      // 23505 = another device took that number first; try the next one.
+      if (!(res.error && res.error.code === "23505" && needOrder)) break;
+    }
     if (res.error) {
       save.disabled = false; save.textContent = id ? "Save changes" : "Add visit";
-      errbox.textContent = (res.error.code === "23505")
-        ? "That day already has a visit at that order number — pick a different order."
-        : (isAuthError(res.error) ? "Your editing session expired — sign in again." : "Could not save — try again.");
+      errbox.textContent = isAuthError(res.error) ? "Your editing session expired — sign in again." : "Could not save — try again.";
       return;
     }
     var row = res.data && res.data[0];
@@ -905,11 +983,11 @@
       body.textContent = isAuthError(res.error) ? "Your editing session expired — sign in again." : "Could not load the daily schedule.";
       return;
     }
-    state.template = res.data || [];
+    state.template = (res.data || []).sort(byTime);
     var rows = state.template.map(function (t) {
       return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid #eee;">' +
         '<div style="min-width:0;"><b>' + esc(t.time_label) + '</b> · ' + esc(t.patient_name || "—") +
-        '<div style="font-size:11.5px;color:#8a8590;">' + esc(t.section) + ' · #' + esc(t.sort_order) +
+        '<div style="font-size:11.5px;color:#8a8590;">' + esc(t.section) +
         (t.location ? ' · ' + esc(t.location) : '') + '</div></div>' +
         '<div class="vedit"><button class="e" data-tedit="' + esc(t.id) + '">✎</button>' +
         '<button class="d" data-tdel="' + esc(t.id) + '">🗑</button></div></div>';
@@ -935,16 +1013,21 @@
   function openTemplateForm(t) {
     var adding = !t;
     function fv(x) { return esc(x == null ? "" : x); }
-    var nextOrder = adding
-      ? (state.template.reduce(function (m, x) { return Math.max(m, x.sort_order || 0); }, 0) + 1)
-      : t.sort_order;
+    // The slot number is not typed any more; the list sorts by time. A new slot
+    // takes the next number past both the template and any visit added by hand
+    // under the old typed-order form (e.g. a one-off #12): generation skips a day
+    // whose number is already taken (ON CONFLICT DO NOTHING, db/011).
+    var nextOrder = t ? t.sort_order : (function () {
+      var m = state.template.reduce(function (acc, x) { return Math.max(acc, x.sort_order || 0); }, 0);
+      state.visits.forEach(function (v) {
+        if (v.sort_order <= MANUAL_ORDER_BASE && v.sort_order > m) m = v.sort_order;
+      });
+      return m + 1;
+    })();
     openModal(
       '<h3>' + (adding ? "Add a daily visit" : "Edit daily visit") + '</h3>' +
       '<p style="font-size:12.5px;color:#55505A;margin:0 0 4px;">Applies to every day.</p>' +
-      '<div class="row2">' +
-        '<div><label>Time</label><input id="t_time" type="text" placeholder="7:00 AM" value="' + (adding ? "" : fv(t.time_label)) + '" /></div>' +
-        '<div><label>Order</label><input id="t_order" type="number" inputmode="numeric" value="' + fv(nextOrder) + '" /></div>' +
-      '</div>' +
+      '<label>Time</label><input id="t_time" type="text" placeholder="7:00 AM" value="' + (adding ? "" : fv(t.time_label)) + '" />' +
       '<label>Section</label><input id="t_section" type="text" placeholder="Morning" value="' + (adding ? "" : fv(t.section)) + '" />' +
       '<label>Patient</label><input id="t_patient" type="text" value="' + (adding ? "" : fv(t.patient_name)) + '" />' +
       '<label>Facility</label><input id="t_loc" type="text" value="' + (adding ? "" : fv(t.location)) + '" />' +
@@ -952,23 +1035,26 @@
       '<div class="err" id="terr"></div>' +
       '<div class="acts"><button class="cancel" id="tcancel">Cancel</button><button class="save" id="tsave">' + (adding ? "Add to every day" : "Save changes") + '</button></div>');
     el("tcancel").onclick = function () { openDailySchedule(); };
-    el("tsave").onclick = function () { saveTemplateSlot(adding ? null : t.id); };
+    el("tsave").onclick = function () { saveTemplateSlot(adding ? null : t.id, nextOrder); };
     el("t_time").focus();
   }
 
-  async function saveTemplateSlot(id) {
+  async function saveTemplateSlot(id, order) {
     var save = el("tsave"), errbox = el("terr");
     var rec = {
       p_section: (el("t_section").value || "").trim(),
-      p_order: parseInt(el("t_order").value, 10),
+      p_order: order,
       p_time: (el("t_time").value || "").trim(),
       p_patient: (el("t_patient").value || "").trim() || null,
       p_location: (el("t_loc").value || "").trim() || null,
       p_task: (el("t_task").value || "").trim() || null
     };
-    if (!rec.p_section || !rec.p_time || isNaN(rec.p_order)) {
-      errbox.textContent = "Time, section and order are required."; return;
+    if (!rec.p_section || !rec.p_time) {
+      errbox.textContent = "Time and section are required."; return;
     }
+    var mins = parseTime(rec.p_time);
+    if (mins === null) { errbox.textContent = "Enter the time like 3:15 PM."; return; }
+    rec.p_time = formatTime(mins);
     save.disabled = true; save.textContent = "Saving…";
     var args = { target_table: TABLE, p_section: rec.p_section, p_order: rec.p_order,
                  p_time: rec.p_time, p_patient: rec.p_patient, p_location: rec.p_location, p_task: rec.p_task };
@@ -1301,7 +1387,7 @@
         week.forEach(function (date) {
           if (!date) { html += '<div class="calcell empty"></div>'; return; }
           var iso = isoOf(date);
-          var list = (byDate[iso] || []).slice().sort(function (a, b) { return a.sort_order - b.sort_order; });
+          var list = (byDate[iso] || []).slice().sort(byTime);
           html += '<div class="calcell' + (list.length ? '' : ' quiet') + '" data-date="' + iso + '">' +
                     '<div class="caldate">' + date.getDate() + '</div>';
           list.forEach(function (v) {
@@ -1340,7 +1426,7 @@
       '</div>';
 
     var rows = state.visits.filter(function (v) { return v.visit_date === iso; })
-      .sort(function (a, b) { return a.sort_order - b.sort_order; });
+      .sort(byTime);
 
     var html = '<div class="daywrap fade">';
     var lastSection = null;
